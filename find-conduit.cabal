@@ -1,0 +1,31 @@
+Name:                find-conduit
+Version:             0.0.1
+Synopsis:            A file-finding conduit that allows user control over traversals.
+License-file:        LICENSE
+License:             MIT
+Author:              John Wiegley
+Maintainer:          johnw@newartisans.com
+Build-Type:          Simple
+Cabal-Version:       >=1.10
+Category:            System
+Description:
+  A file-finding conduit that allows user control over traversals.
+
+Source-repository head
+  type: git
+  location: git://github.com/jwiegley/find-conduit.git
+
+Library
+    default-language:   Haskell98
+    ghc-options: -Wall
+    build-depends:
+        base                 >= 3 && < 5
+      , conduit
+      , conduit-combinators
+      , attoparsec
+      , system-filepath
+      , unix                 >= 2.5.1.1
+      , text                 >= 0.11.3.1
+      , regex-posix
+    exposed-modules:
+        Data.Conduit.Find

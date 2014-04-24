@@ -151,19 +151,6 @@ liftLooped f = Looped $ \a -> do
     r <- f a
     return $ KeepAndRecurse r (liftLooped f)
 
--- check_ :: Monad m => Looped m a a -> Bool -> (a -> m (Maybe a)) -> Looped m a a
--- check_ x@(Looped l) prune f = Looped (\a -> go a =<< l a)
---   where
---     go _ Ignore = return Ignore
---     go _ (Recurse m) = return $ Recurse m
---     go _ (Keep b) = checked b `liftM` f b
---     go _ (KeepAndRecurse b m) = return $ Recurse m
-
---     checked b Nothing = if prune
---                         then Ignore
---                         else Recurse (check_ x prune f)
---     checked _ (Just c) = KeepAndRecurse c (check_ x prune f)
-
 if_ :: Monad m => (a -> Bool) -> Looped m a a
 if_ f = Looped $ \a ->
     return $ if f a

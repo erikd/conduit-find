@@ -83,7 +83,7 @@ ignoreVcs = Predicate $ \entry ->
              then (Nothing, Nothing)
              else (Just entry, Just ignoreVcs)
   where
-    vcsDirs = [ ".git", "CVS", "RCS", "SCCS", ".svn", ".hg" ]
+    vcsDirs = [ ".git", "CVS", "RCS", "SCCS", ".svn", ".hg", "_darcs" ]
 
 -- | The 'regexMatcher' predicate builder matches some part of every path
 --   against a given regex.  Use the simpler 'regex' if you just want to apply

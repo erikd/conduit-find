@@ -16,6 +16,7 @@ module Data.Conduit.Find
     , getPath
     , regular
     , executable
+    , filename_
     , prune
     , test
     , find
@@ -172,11 +173,8 @@ regular = status isRegularFile
 executable :: Monad m => Predicate m FileEntry
 executable = status (\s -> fileMode s .&. ownerExecuteMode /= 0)
 
-prune :: (Monad m, HasFilePath e) => FilePath -> Predicate m e
-prune path = Looped $ \entry ->
-    return $ if getFilePath entry == path
-             then Ignore
-             else KeepAndRecurse entry (prune path)
+filename_ :: (Monad m, HasFilePath e) => FilePath -> Predicate m e
+filename_ path = if_ ((== path) . getFilePath)
 
 test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
 test matcher path =

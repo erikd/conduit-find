@@ -182,13 +182,13 @@ not_ (Looped f) = Looped (\a -> go a `liftM` f a)
     go a (Recurse l) = KeepAndRecurse a (not_ l)
     go _ (KeepAndRecurse _ l) = Recurse (not_ l)
 
-pruneIgnored :: MonadIO m => Looped m a a -> Looped m a a
-pruneIgnored (Looped f) = Looped (\a -> go a `liftM` f a)
+prune :: MonadIO m => Looped m a a -> Looped m a a
+prune (Looped f) = Looped (\a -> go a `liftM` f a)
   where
-    go _ Ignore = Ignore
-    go _ x@(Keep _) = x
-    go _ (Recurse _) = Ignore
-    go _ (KeepAndRecurse b m) = KeepAndRecurse b (pruneIgnored m)
+    go a Ignore = Keep a
+    go _ (Keep _) = Ignore
+    go a (Recurse l) = KeepAndRecurse a (prune l)
+    go _ (KeepAndRecurse _ _) = Ignore
 
 promote :: Monad m => (a -> m (Maybe b)) -> Looped m a b
 promote f = Looped $ \a -> do

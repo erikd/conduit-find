@@ -26,7 +26,7 @@ main = hspec $ do
             xs <- runResourceT $
                 find "."
                     (    ignoreVcs
-                     >>> prune "./dist"
+                     >>> prune (filename_ "dist")
                      >>> glob "*.hs"
                      >>> not_ (glob "Setup*")
                      >>> regular
@@ -34,9 +34,13 @@ main = hspec $ do
                     )
                     $$ sinkList
 
+            liftIO $ putStrLn $ "foo main.hs:37.."
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
+            liftIO $ putStrLn $ "foo main.hs:39.."
             "./dist/setup-config" `elem` xs `shouldBe` False
+            liftIO $ putStrLn $ "foo main.hs:41.."
             "./Setup.hs" `elem` xs `shouldBe` False
+            liftIO $ putStrLn $ "foo main.hs:43.."
             "./.git/config" `elem` xs `shouldBe` False
 
         it "finds files with a different ordering" $ do
@@ -45,7 +49,7 @@ main = hspec $ do
                     (    ignoreVcs
                      >>> glob "*.hs"
                      >>> not_ (glob "Setup*")
-                     >>> prune "./dist"
+                     >>> prune (filename_ "dist")
                      >>> regular
                      >>> not_ executable
                     )
@@ -62,7 +66,7 @@ main = hspec $ do
                     (    ignoreVcs
                      >>> glob "*.hs"
                      >>> not_ (glob "Setup*")
-                     >>> prune "./dist"
+                     >>> prune (filename_ "dist")
                     )
                     (    regular
                      >>> not_ executable

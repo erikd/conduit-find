@@ -5,6 +5,7 @@
 module Data.Conduit.Find
     ( FileEntry(..)
     , Predicate
+    , HasFilePath(..)
     , sourceFileEntries
     , matchAll
     , ignoreVcs
@@ -16,11 +17,13 @@ module Data.Conduit.Find
     , getPath
     , regular
     , executable
+    , prune
     , test
     , find
     , find'
     , lfind
     , lfind'
+    , findWithPreFilter
     , readPaths
     , or_
     , and_
@@ -83,7 +86,7 @@ sourceFileEntries matcher dir = sourceDirectory (trace ("dir: " ++ show (dir)) $
     go m = do
         mfp <- await
         for_ mfp $ \fp -> do
-            applyPredicate m fp yield (flip sourceFileEntries fp)
+            applyPredicate m (trace ("fp: " ++ show (fp)) $ fp) yield (flip sourceFileEntries fp)
             go m
 
 -- | Return all entries.  This is the same as 'sourceDirectoryDeep', except
@@ -112,24 +115,19 @@ regexMatcher :: (Monad m, HasFilePath e)
                 --   match against.  Use this to match against only filenames,
                 --   or to relativize the path against the search root before
                 --   comparing.
-             -> Bool
-                -- ^ If True, prune directories from the search that do not
-                --   match.
              -> Text
                 -- ^ The regular expression search pattern.
              -> Predicate m e
-regexMatcher accessor pruneNonMatching (unpack -> pat) = go
+regexMatcher accessor (unpack -> pat) = go
   where
     go = Looped $ \entry ->
         return $ if encodeString (accessor (getFilePath entry)) =~ pat
-                 then KeepAndRecurse entry go
-                 else if pruneNonMatching
-                      then Ignore
-                      else Recurse go
+                 then trace ("match yes") $ KeepAndRecurse entry go
+                 else trace ("match no: " ++ pat) $ Recurse entry go
 
 -- | Find every entry whose filename part matching the given regular expression.
 regex :: (Monad m, HasFilePath e) => Text -> Predicate m e
-regex = regexMatcher filename False
+regex = regexMatcher filename
 
 -- | Find every entry whose filename part matching the given filename globbing
 --   expression.  For example: @glob "*.hs"@.
@@ -169,9 +167,6 @@ lstat = doStat getSymbolicLinkStatus
 stat :: MonadIO m => Looped m FilePath FileEntry
 stat = doStat getFileStatus
 
--- annotate :: MonadIO m => Bool -> Looped m FilePath FileEntry
--- annotate followSymlinks = if followSymlinks then stat else lstat
-
 getPath :: MonadIO m => Looped m FileEntry FilePath
 getPath = liftLooped (return . entryPath)
 
@@ -182,17 +177,35 @@ regular :: Monad m => Predicate m FileEntry
 regular = status isRegularFile
 
 executable :: Monad m => Predicate m FileEntry
-executable = status ((/= 0) . (.&. ownerExecuteMode) . fileMode)
+executable = status (\s -> fileMode s .&. ownerExecuteMode /= 0)
+
+prune :: (Monad m, HasFilePath e) => FilePath -> Predicate m e
+prune path = Looped $ \entry ->
+    return $ if getFilePath entry == path
+             then trace ("prune ignore") $  Ignore
+             else trace ("prune keep") $  KeepAndRecurse entry (prune path)
 
 test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
 test matcher path =
-    getAll `liftM` testSingle (stat >>> matcher) path alwaysTrue
+    getAny `liftM` testSingle (stat >>> matcher) path alwaysTrue
   where
-    alwaysTrue = const (return (All True))
+    alwaysTrue = const (return (Any True))
 
 find :: (MonadIO m, MonadResource m)
      => FilePath -> Predicate m FileEntry -> Producer m FilePath
 find path pr = sourceFileEntries (stat >>> pr) path =$= mapC entryPath
+
+findWithPreFilter :: (MonadIO m, MonadResource m)
+                  => FilePath
+                  -> Bool
+                  -> Predicate m FilePath
+                  -> Predicate m FileEntry
+                  -> Producer m FileEntry
+findWithPreFilter path followSymlinks filt pr =
+    sourceFileEntries (filt >>> (if followSymlinks
+                                 then stat
+                                 else lstat)
+                            >>> pr) path
 
 find' :: (MonadIO m, MonadResource m)
       => FilePath -> Predicate m FileEntry -> Producer m FileEntry
@@ -215,5 +228,5 @@ readPaths path pr = sourceDirectory path =$= do
         case r of
             Ignore -> return ()
             Keep a -> yield a
-            Recurse _ -> return ()
+            Recurse _ _ -> return ()
             KeepAndRecurse a _ -> yield a

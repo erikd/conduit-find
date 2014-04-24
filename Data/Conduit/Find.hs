@@ -6,7 +6,6 @@ module Data.Conduit.Find
     ( FileEntry(..)
     , Predicate
     , HasFilePath(..)
-    , sourceFileEntries
     , matchAll
     , ignoreVcs
     , regexMatcher
@@ -37,7 +36,6 @@ import Control.Monad
 import Data.Attoparsec.Text
 import Data.Bits
 import Data.Conduit.Find.Looped
-import Data.Foldable (for_)
 import Data.Monoid
 import Data.Text (Text, unpack, pack)
 import Filesystem.Path.CurrentOS (FilePath, encodeString, filename)
@@ -48,6 +46,7 @@ import Text.Regex.Posix ((=~))
 data FileEntry = FileEntry
     { entryPath   :: FilePath
     , entryStatus :: FileStatus
+    , entryDepth  :: Int
     }
 
 instance Show FileEntry where
@@ -77,16 +76,12 @@ type Predicate m a = Looped m a a
 --   'followSymlinks' is @False@ it only prevents directory symlinks from
 --   being read.
 sourceFileEntries :: MonadResource m
-                  => Looped m FilePath FileEntry
-                  -> FilePath
+                  => (FilePath, Int)
+                  -> Looped m (FilePath, Int) FileEntry
                   -> Producer m FileEntry
-sourceFileEntries matcher dir = sourceDirectory dir =$= go matcher
+sourceFileEntries (p, d) m = sourceDirectory p =$= awaitForever f
   where
-    go m = do
-        mfp <- await
-        for_ mfp $ \fp -> do
-            applyPredicate m fp yield (`sourceFileEntries` fp)
-            go m
+    f fp = applyPredicate m (fp, d) yield (sourceFileEntries (fp, succ d))
 
 -- | Return all entries.  This is the same as 'sourceDirectoryDeep', except
 --   that the 'FileStatus' structure for each entry is also provided.  As a
@@ -151,18 +146,18 @@ glob g = case parseOnly globParser g of
                             else [x]
 
 doStat :: MonadIO m
-       => (String -> IO FileStatus) -> Looped m FilePath FileEntry
-doStat getstatus = Looped $ \path -> do
+       => (String -> IO FileStatus) -> Looped m (FilePath, Int) FileEntry
+doStat getstatus = Looped $ \(path, depth) -> do
     s <- liftIO $ getstatus (encodeString path)
-    let entry = FileEntry path s
+    let entry = FileEntry path s depth
     return $ if isDirectory s
              then KeepAndRecurse entry (doStat getstatus)
              else Keep entry
 
-lstat :: MonadIO m => Looped m FilePath FileEntry
+lstat :: MonadIO m => Looped m (FilePath, Int) FileEntry
 lstat = doStat getSymbolicLinkStatus
 
-stat :: MonadIO m => Looped m FilePath FileEntry
+stat :: MonadIO m => Looped m (FilePath, Int) FileEntry
 stat = doStat getFileStatus
 
 getPath :: MonadIO m => Looped m FileEntry FilePath
@@ -185,18 +180,13 @@ prune path = Looped $ \entry ->
 
 test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
 test matcher path =
-    getAny `liftM` testSingle (stat >>> matcher) path alwaysTrue
+    getAny `liftM` testSingle (stat >>> matcher) (path, 0) alwaysTrue
   where
     alwaysTrue = const (return (Any True))
 
-find :: (MonadIO m, MonadResource m)
-     => FilePath -> Predicate m FileEntry -> Producer m FilePath
-find path pr = sourceFileEntries (stat >>> pr) path =$= mapC entryPath
-
-data FindFilter
-    = IgnoreFile
-    | ConsiderFile
-    | MaybeRecurse
+data FindFilter = IgnoreFile
+                | ConsiderFile
+                | MaybeRecurse
     deriving (Show, Eq)
 
 -- | Run a find, but using a pre-pass filter on the FilePaths, to eliminates
@@ -207,49 +197,51 @@ findWithPreFilter :: (MonadIO m, MonadResource m)
                   -> Predicate m FilePath
                   -> Predicate m FileEntry
                   -> Producer m FileEntry
-findWithPreFilter path follow filt pr =
-    sourceDirectory path =$= go pr
+findWithPreFilter path follow filt pr = go 0 path pr
   where
-    go m = do
-        mfp <- await
-        for_ mfp $ \fp -> do
-            r <- lift $ runLooped filt fp
-            let candidate = case r of
-                    Ignore -> IgnoreFile
-                    Keep _ -> ConsiderFile
-                    Recurse _ -> MaybeRecurse
-                    KeepAndRecurse _ _ -> ConsiderFile
-            unless (candidate == IgnoreFile) $ do
-                st <- liftIO $
-                    (if follow
-                     then getFileStatus
-                     else getSymbolicLinkStatus) (encodeString fp)
-                let next = when (isDirectory st) .
-                               findWithPreFilter fp follow filt
-                case candidate of
-                    IgnoreFile -> return ()
-                    MaybeRecurse -> next pr
-                    ConsiderFile ->
-                        applyPredicate m (FileEntry fp st) yield next
-            go m
+    go d p m = sourceDirectory p =$= worker d m
+
+    worker d m = awaitForever $ \fp -> do
+        r <- lift $ runLooped filt fp
+        let candidate = case r of
+                Ignore -> IgnoreFile
+                Keep _ -> ConsiderFile
+                Recurse _ -> MaybeRecurse
+                KeepAndRecurse _ _ -> ConsiderFile
+        unless (candidate == IgnoreFile) $ do
+            st <- liftIO $
+                (if follow
+                 then getFileStatus
+                 else getSymbolicLinkStatus) (encodeString fp)
+            let next = when (isDirectory st) .
+                           findWithPreFilter fp follow filt
+            case candidate of
+                IgnoreFile -> return ()
+                MaybeRecurse -> next pr
+                ConsiderFile ->
+                    applyPredicate m (FileEntry fp st d) yield next
 
 find' :: (MonadIO m, MonadResource m)
       => FilePath -> Predicate m FileEntry -> Producer m FileEntry
-find' path pr = sourceFileEntries (stat >>> pr) path
+find' path pr = sourceFileEntries (path, 0) (stat >>> pr)
 
-lfind :: (MonadIO m, MonadResource m)
-      => FilePath -> Predicate m FileEntry -> Producer m FilePath
-lfind path pr = sourceFileEntries (lstat >>> pr) path =$= mapC entryPath
+find :: (MonadIO m, MonadResource m)
+     => FilePath -> Predicate m FileEntry -> Producer m FilePath
+find path pr = find' path pr =$= mapC entryPath
 
 lfind' :: (MonadIO m, MonadResource m)
        => FilePath -> Predicate m FileEntry -> Producer m FileEntry
-lfind' path pr = sourceFileEntries (lstat >>> pr) path
+lfind' path pr = sourceFileEntries (path, 0) (lstat >>> pr)
+
+lfind :: (MonadIO m, MonadResource m)
+      => FilePath -> Predicate m FileEntry -> Producer m FilePath
+lfind path pr = lfind' path pr =$= mapC entryPath
 
 readPaths :: (MonadIO m, MonadResource m)
           => FilePath -> Predicate m FilePath -> Producer m FilePath
-readPaths path pr = sourceDirectory path =$= do
-    mfp <- await
-    for_ mfp $ \fp -> do
+readPaths path pr = sourceDirectory path =$= awaitForever f
+  where
+    f fp = do
         r <- lift $ runLooped pr fp
         case r of
             Ignore -> return ()

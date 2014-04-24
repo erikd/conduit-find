@@ -3,6 +3,7 @@
 -- | Main entry point to the application.
 module Data.Conduit.Find.Looped where
 
+import Debug.Trace
 import Control.Applicative
 import Control.Arrow
 import Control.Category
@@ -131,7 +132,7 @@ applyPredicate :: (MonadTrans t, (Monad (t m)), Monad m, Show b)
                -> (Looped m a b -> t m ()) -> t m ()
 applyPredicate l x f g = do
     r <- lift $ runLooped l x
-    case r of
+    case (trace ("r: " ++ show (r)) $ r) of
         Ignore -> return ()
         Keep a -> f a
         Recurse m -> g m
@@ -156,6 +157,13 @@ if_ f = Looped $ \a ->
     return $ if f a
              then KeepAndRecurse a (if_ f)
              else Recurse (if_ f)
+
+ifM_ :: Monad m => (a -> m Bool) -> Looped m a a
+ifM_ f = Looped $ \a -> do
+    r <- f a
+    return $ if r
+             then KeepAndRecurse a (ifM_ f)
+             else Recurse (ifM_ f)
 
 or_ :: MonadIO m => Looped m a b -> Looped m a b -> Looped m a b
 or_ (Looped f) (Looped g) = Looped $ \a -> do
@@ -185,10 +193,10 @@ not_ (Looped f) = Looped (\a -> go a `liftM` f a)
 prune :: MonadIO m => Looped m a a -> Looped m a a
 prune (Looped f) = Looped (\a -> go a `liftM` f a)
   where
-    go a Ignore = Keep a
-    go _ (Keep _) = Ignore
-    go a (Recurse l) = KeepAndRecurse a (prune l)
-    go _ (KeepAndRecurse _ _) = Ignore
+    go a Ignore = trace ("prune keep") $ Keep a
+    go _ (Keep _) = trace ("prune drop") $ Ignore
+    go a (Recurse l) = trace ("prune keepr") $ KeepAndRecurse a (prune l)
+    go _ (KeepAndRecurse _ _) = trace ("prune drop") $ Ignore
 
 promote :: Monad m => (a -> m (Maybe b)) -> Looped m a b
 promote f = Looped $ \a -> do

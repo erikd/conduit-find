@@ -5,7 +5,8 @@
 module Data.Conduit.Find
     ( FileEntry(..)
     , Predicate
-    , HasFilePath(..)
+    , HasFileInfo(..)
+    , entryPath
     , matchAll
     , ignoreVcs
     , regexMatcher
@@ -17,6 +18,9 @@ module Data.Conduit.Find
     , regular
     , executable
     , filename_
+    , depth
+    , withPath
+    , withStatus
     , prune
     , test
     , find
@@ -30,6 +34,7 @@ module Data.Conduit.Find
     , not_
     ) where
 
+import Debug.Trace
 import Conduit
 import Control.Applicative
 import Control.Arrow
@@ -44,23 +49,33 @@ import Prelude hiding (FilePath)
 import System.Posix.Files
 import Text.Regex.Posix ((=~))
 
+data FileInfo = FileInfo
+    { infoPath  :: FilePath
+    , infoDepth :: Int
+    }
+
+instance Show FileInfo where
+    show info = "FileInfo " ++ show (infoPath info)
+              ++ " " ++ show (infoDepth info)
+
 data FileEntry = FileEntry
-    { entryPath   :: FilePath
+    { entryInfo   :: FileInfo
     , entryStatus :: FileStatus
-    , entryDepth  :: Int
     }
 
 instance Show FileEntry where
-    show entry = "FileEntry " ++ show (entryPath entry)
+    show entry = "FileEntry " ++ show (entryInfo entry)
 
-class HasFilePath a where
-    getFilePath :: a -> FilePath
+class HasFileInfo a where
+    getFileInfo :: a -> FileInfo
 
-instance HasFilePath FilePath where
-    getFilePath = id
+instance HasFileInfo FileInfo where
+    getFileInfo = id
+    {-# INLINE getFileInfo #-}
 
-instance HasFilePath FileEntry where
-    getFilePath = entryPath
+instance HasFileInfo FileEntry where
+    getFileInfo = entryInfo
+    {-# INLINE getFileInfo #-}
 
 type Predicate m a = Looped m a a
 
@@ -77,12 +92,12 @@ type Predicate m a = Looped m a a
 --   'followSymlinks' is @False@ it only prevents directory symlinks from
 --   being read.
 sourceFileEntries :: MonadResource m
-                  => (FilePath, Int)
-                  -> Looped m (FilePath, Int) FileEntry
+                  => FileInfo
+                  -> Looped m FileInfo FileEntry
                   -> Producer m FileEntry
-sourceFileEntries (p, d) m = sourceDirectory p =$= awaitForever f
+sourceFileEntries (FileInfo p d) m = sourceDirectory p =$= awaitForever f
   where
-    f fp = applyPredicate m (fp, d) yield (sourceFileEntries (fp, succ d))
+    f fp = applyPredicate m (FileInfo (trace ("fp: " ++ show (fp)) $ fp) (trace ("d: " ++ show (d)) $ d)) yield (sourceFileEntries (FileInfo fp (succ d)))
 
 -- | Return all entries.  This is the same as 'sourceDirectoryDeep', except
 --   that the 'FileStatus' structure for each entry is also provided.  As a
@@ -91,11 +106,20 @@ sourceFileEntries (p, d) m = sourceDirectory p =$= awaitForever f
 matchAll :: Monad m => Predicate m a
 matchAll = Looped $ \entry -> return $ KeepAndRecurse entry matchAll
 
+entryPath :: HasFileInfo a => a -> FilePath
+entryPath = infoPath . getFileInfo
+
+withPath :: HasFileInfo a => Monad m => (FilePath -> m Bool) -> Predicate m a
+withPath f = ifM_ (f . entryPath)
+
+withStatus :: Monad m => (FileStatus -> m Bool) -> Predicate m FileEntry
+withStatus f = ifM_ (f . entryStatus)
+
 -- | Return all entries, except for those within version-control metadata
 --   directories (and not including the version control directory itself either).
-ignoreVcs :: (MonadIO m, HasFilePath e) => Predicate m e
+ignoreVcs :: (MonadIO m, HasFileInfo e) => Predicate m e
 ignoreVcs = Looped $ \entry ->
-    return $ if filename (getFilePath entry) `elem` vcsDirs
+    return $ if filename (entryPath entry) `elem` vcsDirs
              then Ignore
              else KeepAndRecurse entry ignoreVcs
   where
@@ -104,7 +128,7 @@ ignoreVcs = Looped $ \entry ->
 -- | The 'regexMatcher' predicate builder matches some part of every path
 --   against a given regex.  Use the simpler 'regex' if you just want to apply
 --   a regex to every file name.
-regexMatcher :: (Monad m, HasFilePath e)
+regexMatcher :: (Monad m, HasFileInfo e)
              => (FilePath -> FilePath)
                 -- ^ Function that specifies which part of the pathname to
                 --   match against.  Use this to match against only filenames,
@@ -116,17 +140,19 @@ regexMatcher :: (Monad m, HasFilePath e)
 regexMatcher accessor (unpack -> pat) = go
   where
     go = Looped $ \entry ->
-        return $ if encodeString (accessor (getFilePath entry)) =~ pat
+        return $ if pathStr entry =~ pat
                  then KeepAndRecurse entry go
                  else Recurse go
 
+    pathStr = encodeString . accessor . entryPath
+
 -- | Find every entry whose filename part matching the given regular expression.
-regex :: (Monad m, HasFilePath e) => Text -> Predicate m e
+regex :: (Monad m, HasFileInfo e) => Text -> Predicate m e
 regex = regexMatcher filename
 
 -- | Find every entry whose filename part matching the given filename globbing
 --   expression.  For example: @glob "*.hs"@.
-glob :: (Monad m, HasFilePath e) => Text -> Predicate m e
+glob :: (Monad m, HasFileInfo e) => Text -> Predicate m e
 glob g = case parseOnly globParser g of
     Left e  -> error $ "Failed to parse glob: " ++ e
     Right x -> regex ("^" <> x <> "$")
@@ -147,18 +173,18 @@ glob g = case parseOnly globParser g of
                             else [x]
 
 doStat :: MonadIO m
-       => (String -> IO FileStatus) -> Looped m (FilePath, Int) FileEntry
-doStat getstatus = Looped $ \(path, depth) -> do
-    s <- liftIO $ getstatus (encodeString path)
-    let entry = FileEntry path s depth
+       => (String -> IO FileStatus) -> Looped m FileInfo FileEntry
+doStat getstatus = Looped $ \(FileInfo p d) -> do
+    s <- liftIO $ getstatus (encodeString p)
+    let entry = FileEntry (FileInfo p d) s
     return $ if isDirectory s
              then KeepAndRecurse entry (doStat getstatus)
              else Keep entry
 
-lstat :: MonadIO m => Looped m (FilePath, Int) FileEntry
+lstat :: MonadIO m => Looped m FileInfo FileEntry
 lstat = doStat getSymbolicLinkStatus
 
-stat :: MonadIO m => Looped m (FilePath, Int) FileEntry
+stat :: MonadIO m => Looped m FileInfo FileEntry
 stat = doStat getFileStatus
 
 getPath :: MonadIO m => Looped m FileEntry FilePath
@@ -173,12 +199,15 @@ regular = status isRegularFile
 executable :: Monad m => Predicate m FileEntry
 executable = status (\s -> fileMode s .&. ownerExecuteMode /= 0)
 
-filename_ :: (Monad m, HasFilePath e) => FilePath -> Predicate m e
-filename_ path = if_ ((== path) . getFilePath)
+filename_ :: (Monad m, HasFileInfo e) => FilePath -> Predicate m e
+filename_ path = if_ ((== path) . filename . entryPath)
+
+depth :: (Monad m, HasFileInfo e) => (Int -> Bool) -> Predicate m e
+depth f = if_ (f . infoDepth . getFileInfo)
 
 test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
 test matcher path =
-    getAny `liftM` testSingle (stat >>> matcher) (path, 0) alwaysTrue
+    getAny `liftM` testSingle (stat >>> matcher) (FileInfo path 0) alwaysTrue
   where
     alwaysTrue = const (return (Any True))
 
@@ -189,39 +218,47 @@ data FindFilter = IgnoreFile
 
 -- | Run a find, but using a pre-pass filter on the FilePaths, to eliminates
 --   files from consideration early and avoid calling stat on them.
-findWithPreFilter :: (MonadIO m, MonadResource m)
-                  => FilePath
-                  -> Bool
-                  -> Predicate m FilePath
-                  -> Predicate m FileEntry
-                  -> Producer m FileEntry
-findWithPreFilter path follow filt pr = go 0 path pr
+doFindPreFilter :: (MonadIO m, MonadResource m)
+                => FileInfo
+                -> Bool
+                -> Predicate m FileInfo
+                -> Predicate m FileEntry
+                -> Producer m FileEntry
+doFindPreFilter (FileInfo path dp) follow filt pr =
+    sourceDirectory path =$= awaitForever (worker (succ dp) pr)
   where
-    go d p m = sourceDirectory p =$= worker d m
-
-    worker d m = awaitForever $ \fp -> do
-        r <- lift $ runLooped filt fp
+    worker d m fp = do
+        let info = FileInfo fp d
+        r <- lift $ runLooped filt (trace ("pf info: " ++ show (info)) $ info)
         let candidate = case r of
                 Ignore -> IgnoreFile
                 Keep _ -> ConsiderFile
                 Recurse _ -> MaybeRecurse
                 KeepAndRecurse _ _ -> ConsiderFile
+        trace ("candidate: " ++ show (candidate)) $ return ()
         unless (candidate == IgnoreFile) $ do
             st <- liftIO $
                 (if follow
                  then getFileStatus
                  else getSymbolicLinkStatus) (encodeString fp)
-            let next = when (isDirectory st) .
-                           findWithPreFilter fp follow filt
+            let next = when (isDirectory st) . doFindPreFilter info follow filt
             case candidate of
-                IgnoreFile -> return ()
+                IgnoreFile   -> return ()
                 MaybeRecurse -> next pr
                 ConsiderFile ->
-                    applyPredicate m (FileEntry fp st d) yield next
+                    applyPredicate m (FileEntry (FileInfo fp d) st) yield next
+
+findWithPreFilter :: (MonadIO m, MonadResource m)
+                  => FilePath
+                  -> Bool
+                  -> Predicate m FileInfo
+                  -> Predicate m FileEntry
+                  -> Producer m FileEntry
+findWithPreFilter path = doFindPreFilter (FileInfo path 1)
 
 find' :: (MonadIO m, MonadResource m)
       => FilePath -> Predicate m FileEntry -> Producer m FileEntry
-find' path pr = sourceFileEntries (path, 0) (stat >>> pr)
+find' path pr = sourceFileEntries (FileInfo path 1) (stat >>> pr)
 
 find :: (MonadIO m, MonadResource m)
      => FilePath -> Predicate m FileEntry -> Producer m FilePath
@@ -229,7 +266,7 @@ find path pr = find' path pr =$= mapC entryPath
 
 lfind' :: (MonadIO m, MonadResource m)
        => FilePath -> Predicate m FileEntry -> Producer m FileEntry
-lfind' path pr = sourceFileEntries (path, 0) (lstat >>> pr)
+lfind' path pr = sourceFileEntries (FileInfo path 1) (lstat >>> pr)
 
 lfind :: (MonadIO m, MonadResource m)
       => FilePath -> Predicate m FileEntry -> Producer m FilePath

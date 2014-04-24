@@ -10,31 +10,30 @@ import Control.Monad
 import Control.Monad.Trans
 import Data.Monoid
 import Data.Profunctor
-import Debug.Trace
 import Prelude hiding ((.), id)
 
 data Result m a b
     = Ignore
     | Keep b
-    | Recurse b (Looped m a b)
+    | Recurse (Looped m a b)
     | KeepAndRecurse b (Looped m a b)
 
 instance Show a => Show (Result r m a) where
     show Ignore = "Ignore"
     show (Keep a) = "Keep " ++ show a
-    show (Recurse a _) = "Recurse " ++ show a
+    show (Recurse _) = "Recurse"
     show (KeepAndRecurse a _) = "KeepAndRecurse " ++ show a
 
 instance Functor m => Functor (Result m a) where
     fmap _ Ignore = Ignore
     fmap f (Keep a) = Keep (f a)
-    fmap f (Recurse a l) = Recurse (f a) (fmap f l)
+    fmap f (Recurse l) = Recurse (fmap f l)
     fmap f (KeepAndRecurse a l)  = KeepAndRecurse (f a) (fmap f l)
 
 instance Functor m => Profunctor (Result m) where
     lmap _ Ignore = Ignore
     lmap _ (Keep a) = Keep a
-    lmap f (Recurse a l) = Recurse a (lmap f l)
+    lmap f (Recurse l) = Recurse (lmap f l)
     lmap f (KeepAndRecurse a l)  = KeepAndRecurse a (lmap f l)
     rmap = fmap
 
@@ -48,13 +47,13 @@ instance Functor m => Profunctor (Result m) where
 --     Keep a >>= f = case f a of
 --         Ignore -> Ignore
 --         Keep b -> Keep b
---         (Recurse _ _) -> Ignore
+--         (Recurse _) -> Ignore
 --         (KeepAndRecurse b _) -> Keep b
---     Recurse a l >>= f = case f a of
+--     Recurse l >>= f = case f a of
 --         Ignore -> Ignore
 --         Keep _ -> Ignore
---         x@(Recurse b m) -> x     -- jww (2014-04-24): Is this right?
---         KeepAndRecurse b m -> Recurse b m -- jww (2014-04-24): Should we compose?
+--         x@(Recurse m) -> x     -- jww (2014-04-24): Is this right?
+--         KeepAndRecurse b m -> Recurse m -- jww (2014-04-24): Should we compose?
 --     KeepAndRecurse a _ >>= f = f a       -- jww (2014-04-24): Should we compose?
 
 newtype Looped m a b = Looped { runLooped :: a -> m (Result m a b) }
@@ -77,7 +76,7 @@ instance Functor m => Profunctor (Looped m) where
 --         case r of
 --             Ignore -> return Ignore
 --             Keep b -> runLooped (k b) a
---             Recurse _ l -> runLooped (l >>= k) a
+--             Recurse l -> runLooped (l >>= k) a
 --             KeepAndRecurse b _ -> runLooped (k b) a
 
 instance Monad m => Category (Looped m) where
@@ -91,24 +90,17 @@ instance Monad m => Category (Looped m) where
                 return $ case r' of
                     Ignore -> Ignore
                     Keep c -> Keep c
-                    Recurse _ _ -> Ignore
+                    Recurse _ -> Ignore
                     KeepAndRecurse c _ -> Keep c
-            Recurse b (Looped l) -> do
-                r' <- f b
-                return $ case r' of
-                    Ignore -> Ignore
-                    Keep _ -> Ignore
-                    Recurse c (Looped m) ->
-                        Recurse c (Looped m . Looped l)
-                    KeepAndRecurse c (Looped m) ->
-                        Recurse c (Looped m . Looped l)
+            Recurse (Looped l) ->
+                return $ Recurse (Looped f . Looped l)
             KeepAndRecurse b (Looped l) -> do
                 r' <- f b
                 return $ case r' of
                     Ignore -> Ignore
                     Keep c -> Keep c
-                    Recurse c (Looped m) ->
-                        Recurse c (Looped m . Looped l)
+                    Recurse (Looped m) ->
+                        Recurse (Looped m . Looped l)
                     KeepAndRecurse c (Looped m) ->
                         KeepAndRecurse c (Looped m . Looped l)
 
@@ -119,14 +111,14 @@ instance Monad m => Arrow (Looped m) where
         return $ case r of
             Ignore -> Ignore
             Keep b -> Keep (b, c)
-            Recurse b l -> Recurse (b, c) (first l)
+            Recurse l -> Recurse (first l)
             KeepAndRecurse b l -> KeepAndRecurse (b, c) (first l)
 
 evens :: Monad m => Looped m Int Int
 evens = Looped $ \x ->
     return $ if even x
              then KeepAndRecurse x evens
-             else Recurse x evens
+             else Recurse evens
 
 tens :: Monad m => Looped m Int Int
 tens = Looped $ \x ->
@@ -142,10 +134,10 @@ applyPredicate :: (MonadTrans t, (Monad (t m)), Monad m, Show b)
                -> (Looped m a b -> t m ()) -> t m ()
 applyPredicate l x f g = do
     r <- lift $ runLooped l x
-    case (trace ("r: " ++ show (r)) $ r) of
+    case r of
         Ignore -> return ()
         Keep a -> f a
-        Recurse _ m -> g m
+        Recurse m -> g m
         KeepAndRecurse a m -> f a >> g m
 
 testSingle :: (Monad m, Monoid c) => Looped m a b -> a -> (b -> m c) -> m c
@@ -154,7 +146,7 @@ testSingle l x f = do
     case r of
         Ignore -> return mempty
         Keep a -> f a
-        Recurse _ _ -> return mempty
+        Recurse _ -> return mempty
         KeepAndRecurse a _ -> f a
 
 liftLooped :: Monad m => (a -> m b) -> Looped m a b
@@ -166,20 +158,20 @@ liftLooped f = Looped $ \a -> do
 -- check_ x@(Looped l) prune f = Looped (\a -> go a =<< l a)
 --   where
 --     go _ Ignore = return Ignore
---     go _ (Recurse b m) = return $ Recurse b m
+--     go _ (Recurse m) = return $ Recurse m
 --     go _ (Keep b) = checked b `liftM` f b
---     go _ (KeepAndRecurse b m) = return $ Recurse b m
+--     go _ (KeepAndRecurse b m) = return $ Recurse m
 
 --     checked b Nothing = if prune
 --                         then Ignore
---                         else Recurse b (check_ x prune f)
+--                         else Recurse (check_ x prune f)
 --     checked _ (Just c) = KeepAndRecurse c (check_ x prune f)
 
 if_ :: Monad m => (a -> Bool) -> Looped m a a
 if_ f = Looped $ \a ->
     return $ if f a
-             then trace ("if_ keepr") $ KeepAndRecurse a (if_ f)
-             else trace ("if_ dropr") $ Recurse a (if_ f)
+             then KeepAndRecurse a (if_ f)
+             else Recurse (if_ f)
 
 or_ :: MonadIO m => Looped m a b -> Looped m a b -> Looped m a b
 or_ (Looped f) (Looped g) = Looped $ \a -> do
@@ -195,21 +187,21 @@ and_ (Looped f) (Looped g) = Looped $ \a -> do
     case r of
         Ignore -> return Ignore
         Keep _ -> g a
-        Recurse b l -> return $ Recurse b l
+        Recurse l -> return $ Recurse l
         KeepAndRecurse _ _ -> g a
 
 not_ :: MonadIO m => Looped m a a -> Looped m a a
 not_ (Looped f) = Looped (\a -> go a `liftM` f a)
   where
-    go a Ignore = trace ("not_ keep") $ Keep a
-    go _ (Keep _) = trace ("not_ drop") $ Ignore
-    go a (Recurse _ l) = trace ("not_ keepr") $ KeepAndRecurse a (not_ l)
-    go a (KeepAndRecurse _ l) = trace ("not_ dropr") $ Recurse a (not_ l)
+    go a Ignore = Keep a
+    go _ (Keep _) = Ignore
+    go a (Recurse l) = KeepAndRecurse a (not_ l)
+    go _ (KeepAndRecurse _ l) = Recurse (not_ l)
 
 pruneIgnored :: MonadIO m => Looped m a a -> Looped m a a
 pruneIgnored (Looped f) = Looped (\a -> go a `liftM` f a)
   where
     go _ Ignore = Ignore
     go _ x@(Keep _) = x
-    go _ (Recurse _ _) = Ignore
+    go _ (Recurse _) = Ignore
     go _ (KeepAndRecurse b m) = KeepAndRecurse b (pruneIgnored m)

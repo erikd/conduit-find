@@ -44,7 +44,6 @@ import Filesystem.Path.CurrentOS (FilePath, encodeString, filename)
 import Prelude hiding (FilePath)
 import System.Posix.Files
 import Text.Regex.Posix ((=~))
-import Debug.Trace
 
 data FileEntry = FileEntry
     { entryPath   :: FilePath
@@ -81,12 +80,12 @@ sourceFileEntries :: MonadResource m
                   => Looped m FilePath FileEntry
                   -> FilePath
                   -> Producer m FileEntry
-sourceFileEntries matcher dir = sourceDirectory (trace ("dir: " ++ show (dir)) $ dir) =$= go matcher
+sourceFileEntries matcher dir = sourceDirectory dir =$= go matcher
   where
     go m = do
         mfp <- await
         for_ mfp $ \fp -> do
-            applyPredicate m (trace ("fp: " ++ show (fp)) $ fp) yield (flip sourceFileEntries fp)
+            applyPredicate m fp yield (`sourceFileEntries` fp)
             go m
 
 -- | Return all entries.  This is the same as 'sourceDirectoryDeep', except
@@ -122,8 +121,8 @@ regexMatcher accessor (unpack -> pat) = go
   where
     go = Looped $ \entry ->
         return $ if encodeString (accessor (getFilePath entry)) =~ pat
-                 then trace ("match yes") $ KeepAndRecurse entry go
-                 else trace ("match no: " ++ pat) $ Recurse entry go
+                 then KeepAndRecurse entry go
+                 else Recurse go
 
 -- | Find every entry whose filename part matching the given regular expression.
 regex :: (Monad m, HasFilePath e) => Text -> Predicate m e
@@ -154,7 +153,6 @@ glob g = case parseOnly globParser g of
 doStat :: MonadIO m
        => (String -> IO FileStatus) -> Looped m FilePath FileEntry
 doStat getstatus = Looped $ \path -> do
-    liftIO $ putStrLn $ "We are calling stat on " ++ encodeString path
     s <- liftIO $ getstatus (encodeString path)
     let entry = FileEntry path s
     return $ if isDirectory s
@@ -182,8 +180,8 @@ executable = status (\s -> fileMode s .&. ownerExecuteMode /= 0)
 prune :: (Monad m, HasFilePath e) => FilePath -> Predicate m e
 prune path = Looped $ \entry ->
     return $ if getFilePath entry == path
-             then trace ("prune ignore") $  Ignore
-             else trace ("prune keep") $  KeepAndRecurse entry (prune path)
+             then Ignore
+             else KeepAndRecurse entry (prune path)
 
 test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
 test matcher path =
@@ -195,17 +193,45 @@ find :: (MonadIO m, MonadResource m)
      => FilePath -> Predicate m FileEntry -> Producer m FilePath
 find path pr = sourceFileEntries (stat >>> pr) path =$= mapC entryPath
 
+data FindFilter
+    = IgnoreFile
+    | ConsiderFile
+    | MaybeRecurse
+    deriving (Show, Eq)
+
+-- | Run a find, but using a pre-pass filter on the FilePaths, to eliminates
+--   files from consideration early and avoid calling stat on them.
 findWithPreFilter :: (MonadIO m, MonadResource m)
                   => FilePath
                   -> Bool
                   -> Predicate m FilePath
                   -> Predicate m FileEntry
                   -> Producer m FileEntry
-findWithPreFilter path followSymlinks filt pr =
-    sourceFileEntries (filt >>> (if followSymlinks
-                                 then stat
-                                 else lstat)
-                            >>> pr) path
+findWithPreFilter path follow filt pr =
+    sourceDirectory path =$= go pr
+  where
+    go m = do
+        mfp <- await
+        for_ mfp $ \fp -> do
+            r <- lift $ runLooped filt fp
+            let candidate = case r of
+                    Ignore -> IgnoreFile
+                    Keep _ -> ConsiderFile
+                    Recurse _ -> MaybeRecurse
+                    KeepAndRecurse _ _ -> ConsiderFile
+            unless (candidate == IgnoreFile) $ do
+                st <- liftIO $
+                    (if follow
+                     then getFileStatus
+                     else getSymbolicLinkStatus) (encodeString fp)
+                let next = when (isDirectory st) .
+                               findWithPreFilter fp follow filt
+                case candidate of
+                    IgnoreFile -> return ()
+                    MaybeRecurse -> next pr
+                    ConsiderFile ->
+                        applyPredicate m (FileEntry fp st) yield next
+            go m
 
 find' :: (MonadIO m, MonadResource m)
       => FilePath -> Predicate m FileEntry -> Producer m FileEntry
@@ -228,5 +254,5 @@ readPaths path pr = sourceDirectory path =$= do
         case r of
             Ignore -> return ()
             Keep a -> yield a
-            Recurse _ _ -> return ()
+            Recurse _ -> return ()
             KeepAndRecurse a _ -> yield a

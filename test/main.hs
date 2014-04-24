@@ -34,13 +34,9 @@ main = hspec $ do
                     )
                     $$ sinkList
 
-            liftIO $ putStrLn $ "test main.hs:37.."
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
-            liftIO $ putStrLn $ "test main.hs:39.."
             "./dist/setup-config" `elem` xs `shouldBe` False
-            liftIO $ putStrLn $ "test main.hs:41.."
             "./Setup.hs" `elem` xs `shouldBe` False
-            liftIO $ putStrLn $ "test main.hs:43.."
             "./.git/config" `elem` xs `shouldBe` False
 
         it "finds files with a different ordering" $ do
@@ -55,13 +51,9 @@ main = hspec $ do
                     )
                     $$ sinkList
 
-            liftIO $ putStrLn $ "test main.hs:58.."
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
-            liftIO $ putStrLn $ "test main.hs:60.."
             "./dist/setup-config" `elem` xs `shouldBe` False
-            liftIO $ putStrLn $ "test main.hs:62.."
             "./Setup.hs" `elem` xs `shouldBe` False
-            liftIO $ putStrLn $ "test main.hs:64.."
             "./.git/config" `elem` xs `shouldBe` False
 
         it "finds files using a pre-pass filter" $ do
@@ -77,11 +69,7 @@ main = hspec $ do
                     )
                     =$ mapC getFilePath $$ sinkList
 
-            liftIO $ putStrLn $ "test main.hs:80.."
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
-            liftIO $ putStrLn $ "test main.hs:82.."
             "./dist/setup-config" `elem` xs `shouldBe` False
-            liftIO $ putStrLn $ "test main.hs:84.."
             "./Setup.hs" `elem` xs `shouldBe` False
-            liftIO $ putStrLn $ "test main.hs:86.."
             "./.git/config" `elem` xs `shouldBe` False

@@ -66,7 +66,7 @@ instance Monad m => Monad (Looped m a) where
             KeepAndRecurse b _ -> runLooped (k b) a
 
 instance Monad m => Category (Looped m) where
-    id = Looped $ \a -> return $ Keep a
+    id = let x = Looped $ \a -> return $ KeepAndRecurse a x in x
     Looped f . Looped g = Looped $ \a -> do
           r <- g a
           case r of
@@ -124,7 +124,7 @@ applyPredicate l x f g = do
 -- | The main entry point.
 main :: IO ()
 main =
-    let x k = match k 52 print (\l -> x l)
+    let x k = applyPredicate k 52 print (\l -> x l)
     in x pr
   where
     pr = do

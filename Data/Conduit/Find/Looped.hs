@@ -1,14 +1,14 @@
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE TupleSections #-}
 
 -- | Main entry point to the application.
-module Data.Conduit.Looped where
+module Data.Conduit.Find.Looped where
 
 import Control.Applicative
 import Control.Arrow
 import Control.Category
 import Control.Monad
-import Control.Monad.Instances
+import Control.Monad.Trans
+import Data.Monoid
 import Data.Profunctor
 import Prelude hiding ((.), id)
 
@@ -25,15 +25,21 @@ instance Show a => Show (Result r m a) where
     show (KeepAndRecurse a _) = "KeepAndRecurse " ++ show a
 
 instance Functor m => Functor (Result m a) where
+    fmap _ Ignore = Ignore
     fmap f (Keep a) = Keep (f a)
     fmap f (Recurse l) = Recurse (fmap f l)
     fmap f (KeepAndRecurse a l)  = KeepAndRecurse (f a) (fmap f l)
 
 instance Functor m => Profunctor (Result m) where
+    lmap _ Ignore = Ignore
     lmap _ (Keep a) = Keep a
     lmap f (Recurse l) = Recurse (lmap f l)
     lmap f (KeepAndRecurse a l)  = KeepAndRecurse a (lmap f l)
     rmap = fmap
+
+instance (Functor m, Monad m) => Applicative (Result m a) where
+    pure = return
+    (<*>) = ap
 
 instance Monad m => Monad (Result m a) where
     return = Keep
@@ -43,8 +49,8 @@ instance Monad m => Monad (Result m a) where
     KeepAndRecurse a (Looped l) >>= f = case f a of
         Ignore -> Ignore
         Keep b -> KeepAndRecurse b (Looped $ \r -> liftM (>>= f) (l r))
-        x@(Recurse (Looped m)) -> x
-        x@(KeepAndRecurse b (Looped m)) -> x
+        x@(Recurse _) -> x
+        x@(KeepAndRecurse _ _) -> x
 
 newtype Looped m a b = Looped { runLooped :: a -> m (Result m a b) }
 
@@ -54,6 +60,10 @@ instance Functor m => Functor (Looped m a) where
 instance Functor m => Profunctor (Looped m) where
     lmap f (Looped k) = Looped (fmap (fmap (lmap f)) (k . f))
     rmap = fmap
+
+instance (Functor m, Monad m) => Applicative (Looped m a) where
+    pure = return
+    (<*>) = ap
 
 instance Monad m => Monad (Looped m a) where
     return = Looped . const . return . return
@@ -73,19 +83,23 @@ instance Monad m => Category (Looped m) where
             Ignore -> return Ignore
             Keep b -> do
                 r' <- f b
-                case r' of
-                    Ignore -> return Ignore
-                    Keep c -> return $ Keep c
-                    Recurse (Looped l) -> return $ Recurse (Looped l . Looped g)
-                    KeepAndRecurse b (Looped l) -> return $ KeepAndRecurse b (Looped l . Looped g)
+                -- If 'f' only wishes to Keep, but not Recurse, do not add
+                -- recursion here.
+                return $ case r' of
+                    Ignore -> Ignore
+                    Keep c -> Keep c
+                    Recurse _ -> Ignore
+                    KeepAndRecurse c _ -> Keep c
             Recurse (Looped l) -> return $ Recurse (Looped f . Looped l)
             KeepAndRecurse b (Looped l) -> do
                 r' <- f b
                 case r' of
                     Ignore -> return Ignore
                     Keep c -> return $ Keep c
-                    Recurse (Looped m) -> return $ Recurse (Looped m . Looped l)
-                    KeepAndRecurse b (Looped m) -> return $ KeepAndRecurse b (Looped m . Looped l)
+                    Recurse (Looped m) ->
+                        return $ Recurse (Looped m . Looped l)
+                    KeepAndRecurse c (Looped m) ->
+                        return $ KeepAndRecurse c (Looped m . Looped l)
 
 instance Monad m => Arrow (Looped m) where
     arr f = Looped $ return . Keep . f
@@ -112,23 +126,72 @@ tens = Looped $ \x ->
 apply :: Looped m a b -> a -> Looped m a b
 apply l x = Looped $ const $ runLooped l x
 
-applyPredicate :: Monad m => Looped m a b -> a -> (b -> m ()) -> (Looped m a b -> m ()) -> m ()
+applyPredicate :: (MonadTrans t, (Monad (t m)), Monad m, Show b)
+               => Looped m a b -> a -> (b -> t m ())
+               -> (Looped m a b -> t m ()) -> t m ()
 applyPredicate l x f g = do
-    r <- runLooped l x
+    r <- lift $ runLooped l x
     case r of
         Ignore -> return ()
         Keep a -> f a
         Recurse m -> g m
         KeepAndRecurse a m -> f a >> g m
 
--- | The main entry point.
-main :: IO ()
-main =
-    let x k = applyPredicate k 52 print (\l -> x l)
-    in x pr
+testSingle :: (Monad m, Monoid c) => Looped m a b -> a -> (b -> m c) -> m c
+testSingle l x f = do
+    r <- runLooped l x
+    case r of
+        Ignore -> return mempty
+        Keep a -> f a
+        Recurse _ -> return mempty
+        KeepAndRecurse a _ -> f a
+
+liftLooped :: Monad m => (a -> m b) -> Looped m a b
+liftLooped f = let x = Looped $ \a -> do
+                       r <- f a
+                       return $ KeepAndRecurse r x
+               in x
+
+check_ :: Monad m => Looped m a a -> Bool -> (a -> m (Maybe a)) -> Looped m a a
+check_ x@(Looped l) prune f = Looped (\a -> go a =<< l a)
   where
-    pr = do
-       x <- evens
-       if x == 52
-           then apply tens 100
-           else return 5
+    go _ Ignore = return Ignore
+    go _ (Recurse m) = return $ Recurse m
+    go _ (Keep b) = checked `liftM` f b
+    go _ (KeepAndRecurse _ m) = return $ Recurse m
+
+    checked Nothing = if prune
+                      then Ignore
+                      else Recurse (check_ x prune f)
+    checked (Just b) = KeepAndRecurse b (check_ x prune f)
+
+if_ :: Monad m => (a -> Bool) -> Looped m a a
+if_ f = Looped $ \a ->
+    return $ if f a
+             then KeepAndRecurse a (if_ f)
+             else Recurse (if_ f)
+
+or_ :: MonadIO m => Looped m a b -> Looped m a b -> Looped m a b
+or_ (Looped f) (Looped g) = Looped $ \a -> do
+    r <- f a
+    case r of
+        Keep b -> return $ Keep b
+        KeepAndRecurse b l -> return $ KeepAndRecurse b l
+        _ -> g a
+
+and_ :: MonadIO m => Looped m a b -> Looped m a b -> Looped m a b
+and_ (Looped f) (Looped g) = Looped $ \a -> do
+    r <- f a
+    case r of
+        Ignore -> return Ignore
+        Keep _ -> g a
+        Recurse l -> return $ Recurse l
+        KeepAndRecurse _ _ -> g a
+
+not_ :: MonadIO m => Looped m a a -> Looped m a a
+not_ (Looped f) = Looped (\a -> go a =<< f a)
+  where
+    go a Ignore = return $ Keep a
+    go _ (Keep _) = return Ignore
+    go a (Recurse l) = return $ KeepAndRecurse a l
+    go _ (KeepAndRecurse _ l) = return $ Recurse l

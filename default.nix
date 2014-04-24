@@ -1,5 +1,5 @@
 { cabal, conduit, conduitCombinators, attoparsec, systemFilepath
-, unixCompat, text, regexPosix
+, unixCompat, text, regexPosix, profunctors, hspec
 }:
 
 cabal.mkDerivation (self: {
@@ -8,7 +8,7 @@ cabal.mkDerivation (self: {
   src = ./.;
   buildDepends = [
     conduit conduitCombinators attoparsec systemFilepath
-    unixCompat text regexPosix
+    unixCompat text regexPosix profunctors hspec
   ];
   meta = {
     homepage = "https://github.com/yesodweb/Shelly.hs";

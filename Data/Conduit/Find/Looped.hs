@@ -3,7 +3,7 @@
 -- | Main entry point to the application.
 module Data.Conduit.Find.Looped where
 
--- import Control.Applicative
+import Control.Applicative
 import Control.Arrow
 import Control.Category
 import Control.Monad
@@ -37,24 +37,21 @@ instance Functor m => Profunctor (Result m) where
     lmap f (KeepAndRecurse a l)  = KeepAndRecurse a (lmap f l)
     rmap = fmap
 
--- instance (Functor m, Monad m) => Applicative (Result m a) where
---     pure = return
---     (<*>) = ap
+instance (Functor m, Monad m) => Applicative (Result m a) where
+    pure = return
+    (<*>) = ap
 
--- instance Monad m => Monad (Result m a) where
---     return = Keep
---     Ignore >>= _ = Ignore
---     Keep a >>= f = case f a of
---         Ignore -> Ignore
---         Keep b -> Keep b
---         (Recurse _) -> Ignore
---         (KeepAndRecurse b _) -> Keep b
---     Recurse l >>= f = case f a of
---         Ignore -> Ignore
---         Keep _ -> Ignore
---         x@(Recurse m) -> x     -- jww (2014-04-24): Is this right?
---         KeepAndRecurse b m -> Recurse m -- jww (2014-04-24): Should we compose?
---     KeepAndRecurse a _ >>= f = f a       -- jww (2014-04-24): Should we compose?
+instance Monad m => Monad (Result m a) where
+    return = Keep
+    Ignore >>= _ = Ignore
+    Keep a >>= f = case f a of
+        Ignore -> Ignore
+        Keep b -> Keep b
+        (Recurse _) -> Ignore
+        (KeepAndRecurse b _) -> Keep b
+    Recurse (Looped l) >>= f =
+        Recurse (Looped $ \r -> liftM (>>= f) (l r))
+    KeepAndRecurse a _ >>= f = f a
 
 newtype Looped m a b = Looped { runLooped :: a -> m (Result m a b) }
 
@@ -65,19 +62,19 @@ instance Functor m => Profunctor (Looped m) where
     lmap f (Looped k) = Looped (fmap (fmap (lmap f)) (k . f))
     rmap = fmap
 
--- instance (Functor m, Monad m) => Applicative (Looped m a) where
---     pure = return
---     (<*>) = ap
+instance (Functor m, Monad m) => Applicative (Looped m a) where
+    pure = return
+    (<*>) = ap
 
--- instance Monad m => Monad (Looped m a) where
---     return = Looped . const . return . return
---     Looped f >>= k = Looped $ \a -> do
---         r <- f a
---         case r of
---             Ignore -> return Ignore
---             Keep b -> runLooped (k b) a
---             Recurse l -> runLooped (l >>= k) a
---             KeepAndRecurse b _ -> runLooped (k b) a
+instance Monad m => Monad (Looped m a) where
+    return = Looped . const . return . return
+    Looped f >>= k = Looped $ \a -> do
+        r <- f a
+        case r of
+            Ignore -> return Ignore
+            Keep b -> runLooped (k b) a
+            Recurse l -> runLooped (l >>= k) a
+            KeepAndRecurse b _ -> runLooped (k b) a
 
 instance Monad m => Category (Looped m) where
     id = let x = Looped $ \a -> return $ KeepAndRecurse a x in x

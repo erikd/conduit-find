@@ -189,3 +189,19 @@ pruneIgnored (Looped f) = Looped (\a -> go a `liftM` f a)
     go _ x@(Keep _) = x
     go _ (Recurse _) = Ignore
     go _ (KeepAndRecurse b m) = KeepAndRecurse b (pruneIgnored m)
+
+promote :: Monad m => (a -> m (Maybe b)) -> Looped m a b
+promote f = Looped $ \a -> do
+    r <- f a
+    return $ case r of
+        Nothing -> Recurse (promote f)
+        Just b -> KeepAndRecurse b (promote f)
+
+demote :: Monad m => Looped m a b -> a -> m (Maybe b)
+demote (Looped f) a = do
+    r <- f a
+    return $ case r of
+        Ignore -> Nothing
+        Keep b -> Just b
+        Recurse _ -> Nothing
+        KeepAndRecurse b _ -> Just b

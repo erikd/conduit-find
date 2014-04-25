@@ -56,6 +56,29 @@ instance Monad m => Monad (Result m a) where
         RecurseOnly (Looped $ \r -> liftM (>>= f) (l r))
     KeepAndRecurse a _ >>= f = f a
 
+instance Semigroup (Result m a a) where
+    Ignore <> _ = Ignore
+    _ <> Ignore = Ignore
+    RecurseOnly m <> _ = RecurseOnly m
+    _ <> RecurseOnly m = RecurseOnly m
+    _ <> Keep b = Keep b
+    Keep _ <> KeepAndRecurse b _ = Keep b
+    KeepAndRecurse _ _ <> KeepAndRecurse b m = KeepAndRecurse b m
+
+instance Monoid (Result m a a) where
+    mempty = Ignore
+    x `mappend` y = x <> y
+
+instance Monad m => MonadPlus (Result m a) where
+    mzero = Ignore
+    Ignore `mplus` _ = Ignore
+    _ `mplus` Ignore = Ignore
+    RecurseOnly m `mplus` _ = RecurseOnly m
+    _ `mplus` RecurseOnly m = RecurseOnly m
+    _ `mplus` Keep b = Keep b
+    Keep _ `mplus` KeepAndRecurse b _ = Keep b
+    KeepAndRecurse _ _ `mplus` KeepAndRecurse b m = KeepAndRecurse b m
+
 newtype Looped m a b = Looped { runLooped :: a -> m (Result m a b) }
 
 instance Functor m => Functor (Looped m a) where
@@ -122,8 +145,9 @@ instance Monad m => Arrow (Looped m) where
 -- @
 --   flip runLooped "bar.hs" $ do
 --       x <- filename_ (== "foo.hs")
---       when (x /= "") $ consider "baz.hs" $ do
---           filename_ (== "baz.hs")    -- passes
+--       when (x /= "") $
+--           consider "baz.hs" $
+--               filename_ (== "baz.hs")    -- passes
 -- @
 consider :: a -> Looped m a b -> Looped m a b
 consider x l = Looped $ const $ runLooped l x
@@ -216,6 +240,16 @@ instance (Functor m, Monad m) => Semigroup (Predicate m a) where
 instance (Functor m, Monad m) => Monoid (Predicate m a) where
     mempty = let x = Looped (\a -> return $ KeepAndRecurse a x) in x
     f `mappend` g = f <> g
+
+instance Monad m => MonadPlus (Looped m a) where
+    mzero = Looped $ const $ return Ignore
+    Looped f `mplus` Looped g = Looped $ \a -> do
+        r <- f a
+        case r of
+            Ignore -> g a
+            Keep b -> return $ Keep b
+            RecurseOnly _ -> g a
+            KeepAndRecurse b m -> return $ KeepAndRecurse b m
 
 matchAll :: Monad m => Predicate m a
 matchAll = Looped $ \entry -> return $ KeepAndRecurse entry matchAll

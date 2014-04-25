@@ -34,7 +34,6 @@ module Data.Conduit.Find
     , not_
     ) where
 
-import Debug.Trace
 import Conduit
 import Control.Applicative
 import Control.Arrow
@@ -97,7 +96,8 @@ sourceFileEntries :: MonadResource m
                   -> Producer m FileEntry
 sourceFileEntries (FileInfo p d) m = sourceDirectory p =$= awaitForever f
   where
-    f fp = applyPredicate m (FileInfo (trace ("fp: " ++ show (fp)) $ fp) (trace ("d: " ++ show (d)) $ d)) yield (sourceFileEntries (FileInfo fp (succ d)))
+    f fp = applyPredicate m (FileInfo fp d) yield $
+        sourceFileEntries (FileInfo fp (succ d))
 
 -- | Return all entries.  This is the same as 'sourceDirectoryDeep', except
 --   that the 'FileStatus' structure for each entry is also provided.  As a
@@ -229,13 +229,12 @@ doFindPreFilter (FileInfo path dp) follow filt pr =
   where
     worker d m fp = do
         let info = FileInfo fp d
-        r <- lift $ runLooped filt (trace ("pf info: " ++ show (info)) $ info)
+        r <- lift $ runLooped filt info
         let candidate = case r of
                 Ignore -> IgnoreFile
                 Keep _ -> ConsiderFile
                 Recurse _ -> MaybeRecurse
                 KeepAndRecurse _ _ -> ConsiderFile
-        trace ("candidate: " ++ show (candidate)) $ return ()
         unless (candidate == IgnoreFile) $ do
             st <- liftIO $
                 (if follow

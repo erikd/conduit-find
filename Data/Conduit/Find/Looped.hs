@@ -3,7 +3,6 @@
 -- | Main entry point to the application.
 module Data.Conduit.Find.Looped where
 
-import Debug.Trace
 import Control.Applicative
 import Control.Arrow
 import Control.Category
@@ -132,7 +131,7 @@ applyPredicate :: (MonadTrans t, (Monad (t m)), Monad m, Show b)
                -> (Looped m a b -> t m ()) -> t m ()
 applyPredicate l x f g = do
     r <- lift $ runLooped l x
-    case (trace ("r: " ++ show (r)) $ r) of
+    case r of
         Ignore -> return ()
         Keep a -> f a
         Recurse m -> g m
@@ -193,10 +192,10 @@ not_ (Looped f) = Looped (\a -> go a `liftM` f a)
 prune :: MonadIO m => Looped m a a -> Looped m a a
 prune (Looped f) = Looped (\a -> go a `liftM` f a)
   where
-    go a Ignore = trace ("prune keep") $ Keep a
-    go _ (Keep _) = trace ("prune drop") $ Ignore
-    go a (Recurse l) = trace ("prune keepr") $ KeepAndRecurse a (prune l)
-    go _ (KeepAndRecurse _ _) = trace ("prune drop") $ Ignore
+    go a Ignore = Keep a
+    go _ (Keep _) = Ignore
+    go a (Recurse l) = KeepAndRecurse a (prune l)
+    go _ (KeepAndRecurse _ _) = Ignore
 
 promote :: Monad m => (a -> m (Maybe b)) -> Looped m a b
 promote f = Looped $ \a -> do

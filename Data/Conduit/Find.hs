@@ -100,7 +100,7 @@ find src -name '*.hs' -type f -print
 Would in find-conduit be:
 
 @
-find "src" (glob "*.hs" \<\> regular) $$ mapM_C (liftIO . print)
+find "src" (glob \"*.hs\" \<\> regular) $$ mapM_C (liftIO . print)
 @
 
 The 'glob' predicate matches the file basename against the globbing pattern,
@@ -142,7 +142,7 @@ find \".\" (prune (depth (> 2)))
 This is the same as using '-maxdepth 2' in find.
 
 @
-find \".\" (prune (filename_ (== "dist")))
+find \".\" (prune (filename_ (== \"dist\")))
 @
 
 This is the same as:

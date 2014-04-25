@@ -231,10 +231,7 @@ entryPath = infoPath . getFileInfo
 -- | Return all entries, except for those within version-control metadata
 --   directories (and not including the version control directory itself either).
 ignoreVcs :: (MonadIO m, HasFileInfo e) => Predicate m e
-ignoreVcs = Looped $ \entry ->
-    return $ if filename (entryPath entry) `elem` vcsDirs
-             then Ignore
-             else KeepAndRecurse entry ignoreVcs
+ignoreVcs = prune (filename_ (`elem` vcsDirs))
   where
     vcsDirs = [ ".git", "CVS", "RCS", "SCCS", ".svn", ".hg", "_darcs" ]
 
@@ -245,13 +242,13 @@ regex pat = filename_ (=~ pat)
 --   ease of use with this module.  For example, you can simply say:
 --
 -- @
---    filename_ (=~ "\\.hs$")
+--    filename_ (=~ \"\\\\.hs$\")
 -- @
 --
 -- Which is the same thing as:
 --
 -- @
---    regex "\\.hs$"
+--    regex \"\\\\.hs$\"
 -- @
 (=~) :: FilePath -> Text -> Bool
 str =~ pat = encodeString str R.=~ unpack pat

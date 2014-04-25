@@ -1,4 +1,6 @@
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 -- | Main entry point to the application.
 module Data.Conduit.Find.Looped where
@@ -8,8 +10,9 @@ import Control.Arrow
 import Control.Category
 import Control.Monad
 import Control.Monad.Trans
-import Data.Monoid
+import Data.Monoid hiding ((<>))
 import Data.Profunctor
+import Data.Semigroup
 import Prelude hiding ((.), id)
 
 data Result m a b
@@ -111,13 +114,24 @@ instance Monad m => Arrow (Looped m) where
             RecurseOnly l -> RecurseOnly (first l)
             KeepAndRecurse b l -> KeepAndRecurse (b, c) (first l)
 
+-- | Within a predicate block, 'consider' a different item than what is
+--   currently being predicated upon.  This makes it possible to write custom
+--   logic within the Monad instance for Looped, such as in this contrived
+--   example:
+--
+-- @
+--   flip runLooped "bar.hs" $ do
+--       x <- filename_ (== "foo.hs")
+--       when (x /= "") $ consider "baz.hs" $ do
+--           filename_ (== "baz.hs")    -- passes
+-- @
 consider :: a -> Looped m a b -> Looped m a b
 consider x l = Looped $ const $ runLooped l x
 
-applyPredicate :: (MonadTrans t, (Monad (t m)), Monad m, Show b)
-               => Looped m a b -> a -> (b -> t m ())
-               -> (Looped m a b -> t m ()) -> t m ()
-applyPredicate l x f g = do
+applyLooped :: (MonadTrans t, (Monad (t m)), Monad m, Show b)
+            => Looped m a b -> a -> (b -> t m ())
+            -> (Looped m a b -> t m ()) -> t m ()
+applyLooped l x f g = do
     r <- lift $ runLooped l x
     case r of
         Ignore -> return ()
@@ -190,15 +204,24 @@ lowerKleisliMaybe (Looped f) a = do
 
 type Predicate m a = Looped m a a
 
--- instance (Functor m, Monad m) => Alternative (Predicate m) where
---     empty = let x = Looped (\a -> return $ KeepAndRecurse a x) in x
---     Looped f <|> Looped g = Looped $ \a -> do
---         r <- f a
---         case r of
---             Ignore -> g a
---             Keep b -> return $ Keep b
---             RecurseOnly _ -> g a
---             KeepAndRecurse b m -> return $ KeepAndRecurse b m
+instance (Functor m, Monad m) => Semigroup (Predicate m a) where
+    Looped f <> Looped g = Looped $ \a -> do
+        r <- f a
+        case r of
+            Ignore -> g a
+            Keep b -> return $ Keep b
+            RecurseOnly _ -> g a
+            KeepAndRecurse b m -> return $ KeepAndRecurse b m
+
+instance (Functor m, Monad m) => Monoid (Predicate m a) where
+    mempty = let x = Looped (\a -> return $ KeepAndRecurse a x) in x
+    f `mappend` g = f <> g
+
+matchAll :: Monad m => Predicate m a
+matchAll = Looped $ \entry -> return $ KeepAndRecurse entry matchAll
+
+ignoreAll :: Monad m => Looped m a b
+ignoreAll = Looped $ const $ return $ RecurseOnly ignoreAll
 
 not_ :: MonadIO m => Predicate m a -> Predicate m a
 not_ (Looped f) = Looped (\a -> go a `liftM` f a)

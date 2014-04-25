@@ -9,6 +9,7 @@ module Data.Conduit.Find
     , consider
     , entryPath
     , matchAll
+    , ignoreAll
     , ignoreVcs
     , regexMatcher
     , regex
@@ -103,24 +104,11 @@ sourceFileEntries :: MonadResource m
                   -> Producer m FileEntry
 sourceFileEntries (FileInfo p d) m = sourceDirectory p =$= awaitForever f
   where
-    f fp = applyPredicate m (FileInfo fp d) yield $
+    f fp = applyLooped m (FileInfo fp d) yield $
         sourceFileEntries (FileInfo fp (succ d))
-
--- | Return all entries.  This is the same as 'sourceDirectoryDeep', except
---   that the 'FileStatus' structure for each entry is also provided.  As a
---   result, only one stat call is ever made per entry, compared to two per
---   directory in the current version of 'sourceDirectoryDeep'.
-matchAll :: Monad m => Predicate m a
-matchAll = Looped $ \entry -> return $ KeepAndRecurse entry matchAll
 
 entryPath :: HasFileInfo a => a -> FilePath
 entryPath = infoPath . getFileInfo
-
-withPath :: HasFileInfo a => Monad m => (FilePath -> m Bool) -> Predicate m a
-withPath f = ifM_ (f . entryPath)
-
-withStatus :: Monad m => (FileStatus -> m Bool) -> Predicate m FileEntry
-withStatus f = ifM_ (f . entryStatus)
 
 -- | Return all entries, except for those within version-control metadata
 --   directories (and not including the version control directory itself either).
@@ -146,12 +134,11 @@ regexMatcher :: (Monad m, HasFileInfo e)
              -> Predicate m e
 regexMatcher accessor (unpack -> pat) = go
   where
+    pathStr = encodeString . accessor . entryPath
     go = Looped $ \entry ->
         return $ if pathStr entry =~ pat
                  then KeepAndRecurse entry go
                  else RecurseOnly go
-
-    pathStr = encodeString . accessor . entryPath
 
 -- | Find every entry whose filename part matching the given regular expression.
 regex :: (Monad m, HasFileInfo e) => Text -> Predicate m e
@@ -194,8 +181,11 @@ lstat = doStat getSymbolicLinkStatus
 stat :: MonadIO m => Looped m FileInfo FileEntry
 stat = doStat getFileStatus
 
+withStatus :: Monad m => (FileStatus -> m Bool) -> Predicate m FileEntry
+withStatus f = ifM_ (f . entryStatus)
+
 status :: Monad m => (FileStatus -> Bool) -> Predicate m FileEntry
-status f = if_ (f . entryStatus)
+status f = withStatus (return . f)
 
 regular :: Monad m => Predicate m FileEntry
 regular = status isRegularFile
@@ -206,26 +196,34 @@ hasMode m = status (\s -> fileMode s .&. m /= 0)
 executable :: Monad m => Predicate m FileEntry
 executable = hasMode ownerExecuteMode
 
+withPath :: HasFileInfo a => Monad m => (FilePath -> m Bool) -> Predicate m a
+withPath f = ifM_ (f . entryPath)
+
 filename_ :: (Monad m, HasFileInfo e) => (FilePath -> Bool) -> Predicate m e
-filename_ f = if_ (f . filename . entryPath)
+filename_ f = withPath (return . f . filename)
 
 filenameS_ :: (Monad m, HasFileInfo e) => (String -> Bool) -> Predicate m e
-filenameS_ f = if_ (f . encodeString . filename . entryPath)
+filenameS_ f = withPath (return . f . encodeString . filename)
 
 filepath_ :: (Monad m, HasFileInfo e) => (FilePath -> Bool) -> Predicate m e
-filepath_ f = if_ (f . entryPath)
+filepath_ f = withPath (return . f)
 
 filepathS_ :: (Monad m, HasFileInfo e) => (String -> Bool) -> Predicate m e
-filepathS_ f = if_ (f . encodeString . entryPath)
+filepathS_ f = withPath (return . f . encodeString)
 
 depth :: (Monad m, HasFileInfo e) => (Int -> Bool) -> Predicate m e
 depth f = if_ (f . infoDepth . getFileInfo)
 
+withStatusTime :: Monad m
+               => (UTCTime -> Bool) -> (FileStatus -> POSIXTime)
+               -> Predicate m FileEntry
+withStatusTime f g = status (f . posixSecondsToUTCTime . g)
+
 lastAccessed :: Monad m => (UTCTime -> Bool) -> Predicate m FileEntry
-lastAccessed f = status (f . posixSecondsToUTCTime . accessTimeHiRes)
+lastAccessed = flip withStatusTime accessTimeHiRes
 
 lastModified :: Monad m => (UTCTime -> Bool) -> Predicate m FileEntry
-lastModified f = status (f . posixSecondsToUTCTime . modificationTimeHiRes)
+lastModified = flip withStatusTime modificationTimeHiRes
 
 test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
 test matcher path =
@@ -267,7 +265,7 @@ doFindPreFilter (FileInfo path dp) follow filt pr =
                 IgnoreFile   -> return ()
                 MaybeRecurse -> next pr
                 ConsiderFile ->
-                    applyPredicate m (FileEntry (FileInfo fp d) st) yield next
+                    applyLooped m (FileEntry (FileInfo fp d) st) yield next
 
 findWithPreFilter :: (MonadIO m, MonadResource m)
                   => FilePath

@@ -6,6 +6,7 @@ module Data.Conduit.Find
     ( FileEntry(..)
     , Predicate
     , HasFileInfo(..)
+    , consider
     , entryPath
     , matchAll
     , ignoreVcs
@@ -14,8 +15,8 @@ module Data.Conduit.Find
     , glob
     , stat
     , lstat
-    , getPath
     , regular
+    , hasMode
     , executable
     , filename_
     , filenameS_
@@ -53,6 +54,7 @@ import Data.Time.Clock.POSIX
 import Filesystem.Path.CurrentOS (FilePath, encodeString, filename)
 import Prelude hiding (FilePath)
 import System.Posix.Files
+import System.Posix.Types
 import Text.Regex.Posix ((=~))
 
 data FileInfo = FileInfo
@@ -147,7 +149,7 @@ regexMatcher accessor (unpack -> pat) = go
     go = Looped $ \entry ->
         return $ if pathStr entry =~ pat
                  then KeepAndRecurse entry go
-                 else Recurse go
+                 else RecurseOnly go
 
     pathStr = encodeString . accessor . entryPath
 
@@ -192,17 +194,17 @@ lstat = doStat getSymbolicLinkStatus
 stat :: MonadIO m => Looped m FileInfo FileEntry
 stat = doStat getFileStatus
 
-getPath :: MonadIO m => Looped m FileEntry FilePath
-getPath = liftLooped (return . entryPath)
-
 status :: Monad m => (FileStatus -> Bool) -> Predicate m FileEntry
 status f = if_ (f . entryStatus)
 
 regular :: Monad m => Predicate m FileEntry
 regular = status isRegularFile
 
+hasMode :: Monad m => FileMode -> Predicate m FileEntry
+hasMode m = status (\s -> fileMode s .&. m /= 0)
+
 executable :: Monad m => Predicate m FileEntry
-executable = status (\s -> fileMode s .&. ownerExecuteMode /= 0)
+executable = hasMode ownerExecuteMode
 
 filename_ :: (Monad m, HasFileInfo e) => (FilePath -> Bool) -> Predicate m e
 filename_ f = if_ (f . filename . entryPath)
@@ -253,7 +255,7 @@ doFindPreFilter (FileInfo path dp) follow filt pr =
         let candidate = case r of
                 Ignore -> IgnoreFile
                 Keep _ -> ConsiderFile
-                Recurse _ -> MaybeRecurse
+                RecurseOnly _ -> MaybeRecurse
                 KeepAndRecurse _ _ -> ConsiderFile
         unless (candidate == IgnoreFile) $ do
             st <- liftIO $
@@ -300,5 +302,5 @@ readPaths path pr = sourceDirectory path =$= awaitForever f
         case r of
             Ignore -> return ()
             Keep a -> yield a
-            Recurse _ -> return ()
+            RecurseOnly _ -> return ()
             KeepAndRecurse a _ -> yield a

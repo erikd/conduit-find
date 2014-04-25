@@ -11,7 +11,6 @@ module Data.Conduit.Find
     , matchAll
     , ignoreAll
     , ignoreVcs
-    , regexMatcher
     , regex
     , glob
     , stat
@@ -86,27 +85,6 @@ instance HasFileInfo FileEntry where
     getFileInfo = entryInfo
     {-# INLINE getFileInfo #-}
 
--- | Walk through the entries of a directory tree, allowing the user to
---   specify a 'Predicate' which may decides not only which entries to yield
---   from the conduit, but also which directories to follow, and how to
---   recurse into that directory by permitting the use of a subsequent
---   'Predicate'.
---
---   Note that the 'followSymlinks' parameter to this function has a different
---   meaning than it does for 'sourceDirectoryDeep': if @True@, symlinks are
---   never passed to the predicate, only what they point to; if @False@,
---   symlinks are never read at all.  For 'sourceDirectoryDeep', if
---   'followSymlinks' is @False@ it only prevents directory symlinks from
---   being read.
-sourceFileEntries :: MonadResource m
-                  => FileInfo
-                  -> Looped m FileInfo FileEntry
-                  -> Producer m FileEntry
-sourceFileEntries (FileInfo p d) m = sourceDirectory p =$= awaitForever f
-  where
-    f fp = applyLooped m (FileInfo fp d) yield $
-        sourceFileEntries (FileInfo fp (succ d))
-
 entryPath :: HasFileInfo a => a -> FilePath
 entryPath = infoPath . getFileInfo
 
@@ -119,26 +97,6 @@ ignoreVcs = Looped $ \entry ->
              else KeepAndRecurse entry ignoreVcs
   where
     vcsDirs = [ ".git", "CVS", "RCS", "SCCS", ".svn", ".hg", "_darcs" ]
-
--- | The 'regexMatcher' predicate builder matches some part of every path
---   against a given regex.  Use the simpler 'regex' if you just want to apply
---   a regex to every file name.
-regexMatcher :: (Monad m, HasFileInfo e)
-             => (FilePath -> FilePath)
-                -- ^ Function that specifies which part of the pathname to
-                --   match against.  Use this to match against only filenames,
-                --   or to relativize the path against the search root before
-                --   comparing.
-             -> Text
-                -- ^ The regular expression search pattern.
-             -> Predicate m e
-regexMatcher accessor (unpack -> pat) = go
-  where
-    pathStr = encodeString . accessor . entryPath
-    go = Looped $ \entry ->
-        return $ if pathStr entry =~ pat
-                 then KeepAndRecurse entry go
-                 else RecurseOnly go
 
 -- | Find every entry whose filename part matching the given regular expression.
 regex :: (Monad m, HasFileInfo e) => Text -> Predicate m e
@@ -225,11 +183,53 @@ lastAccessed = flip withStatusTime accessTimeHiRes
 lastModified :: Monad m => (UTCTime -> Bool) -> Predicate m FileEntry
 lastModified = flip withStatusTime modificationTimeHiRes
 
-test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
-test matcher path =
-    getAny `liftM` testSingle (stat >>> matcher) (FileInfo path 0) alwaysTrue
+-- Walk through the entries of a directory tree, allowing the user to specify
+-- a 'Predicate' which may decides not only which entries to yield from the
+-- conduit, but also which directories to follow, and how to recurse into that
+-- directory by permitting the use of a subsequent 'Predicate'.
+--
+-- Note that the 'followSymlinks' parameter to this function has a different
+-- meaning than it does for 'sourceDirectoryDeep': if @True@, symlinks are
+-- never passed to the predicate, only what they point to; if @False@,
+-- symlinks are never read at all.  For 'sourceDirectoryDeep', if
+-- 'followSymlinks' is @False@ it only prevents directory symlinks from being
+-- read.
+sourceFileEntries :: MonadResource m
+                  => FileInfo
+                  -> Looped m FileInfo FileEntry
+                  -> Producer m FileEntry
+sourceFileEntries (FileInfo p d) m = sourceDirectory p =$= awaitForever f
   where
-    alwaysTrue = const (return (Any True))
+    f fp = applyLooped m (FileInfo fp d) yield $
+        sourceFileEntries (FileInfo fp (succ d))
+
+find' :: (MonadIO m, MonadResource m)
+      => FilePath -> Predicate m FileEntry -> Producer m FileEntry
+find' path pr = sourceFileEntries (FileInfo path 1) (stat >>> pr)
+
+find :: (MonadIO m, MonadResource m)
+     => FilePath -> Predicate m FileEntry -> Producer m FilePath
+find path pr = find' path pr =$= mapC entryPath
+
+lfind' :: (MonadIO m, MonadResource m)
+       => FilePath -> Predicate m FileEntry -> Producer m FileEntry
+lfind' path pr = sourceFileEntries (FileInfo path 1) (lstat >>> pr)
+
+lfind :: (MonadIO m, MonadResource m)
+      => FilePath -> Predicate m FileEntry -> Producer m FilePath
+lfind path pr = lfind' path pr =$= mapC entryPath
+
+readPaths :: (MonadIO m, MonadResource m)
+          => FilePath -> Predicate m FilePath -> Producer m FilePath
+readPaths path pr = sourceDirectory path =$= awaitForever f
+  where
+    f fp = do
+        r <- lift $ runLooped pr fp
+        case r of
+            Ignore -> return ()
+            Keep a -> yield a
+            RecurseOnly _ -> return ()
+            KeepAndRecurse a _ -> yield a
 
 data FindFilter = IgnoreFile
                 | ConsiderFile
@@ -275,30 +275,10 @@ findWithPreFilter :: (MonadIO m, MonadResource m)
                   -> Producer m FileEntry
 findWithPreFilter path = doFindPreFilter (FileInfo path 1)
 
-find' :: (MonadIO m, MonadResource m)
-      => FilePath -> Predicate m FileEntry -> Producer m FileEntry
-find' path pr = sourceFileEntries (FileInfo path 1) (stat >>> pr)
-
-find :: (MonadIO m, MonadResource m)
-     => FilePath -> Predicate m FileEntry -> Producer m FilePath
-find path pr = find' path pr =$= mapC entryPath
-
-lfind' :: (MonadIO m, MonadResource m)
-       => FilePath -> Predicate m FileEntry -> Producer m FileEntry
-lfind' path pr = sourceFileEntries (FileInfo path 1) (lstat >>> pr)
-
-lfind :: (MonadIO m, MonadResource m)
-      => FilePath -> Predicate m FileEntry -> Producer m FilePath
-lfind path pr = lfind' path pr =$= mapC entryPath
-
-readPaths :: (MonadIO m, MonadResource m)
-          => FilePath -> Predicate m FilePath -> Producer m FilePath
-readPaths path pr = sourceDirectory path =$= awaitForever f
+-- | Test a file path using the same type of 'Predicate' that is accepted by
+--   'find'.
+test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
+test matcher path =
+    getAny `liftM` testSingle (stat >>> matcher) (FileInfo path 0) alwaysTrue
   where
-    f fp = do
-        r <- lift $ runLooped pr fp
-        case r of
-            Ignore -> return ()
-            Keep a -> yield a
-            RecurseOnly _ -> return ()
-            KeepAndRecurse a _ -> yield a
+    alwaysTrue = const (return (Any True))

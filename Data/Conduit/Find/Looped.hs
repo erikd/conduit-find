@@ -257,6 +257,7 @@ matchAll = Looped $ \entry -> return $ KeepAndRecurse entry matchAll
 ignoreAll :: Monad m => Looped m a b
 ignoreAll = Looped $ const $ return $ RecurseOnly ignoreAll
 
+-- | 'not_' reverse the meaning of the given predicate, preserving recursion.
 not_ :: MonadIO m => Predicate m a -> Predicate m a
 not_ (Looped f) = Looped (\a -> go a `liftM` f a)
   where
@@ -265,6 +266,7 @@ not_ (Looped f) = Looped (\a -> go a `liftM` f a)
     go a (RecurseOnly l) = KeepAndRecurse a (not_ l)
     go _ (KeepAndRecurse _ l) = RecurseOnly (not_ l)
 
+-- | 'prune' is much like 'not_', but does not preserve recursion.
 prune :: MonadIO m => Predicate m a -> Predicate m a
 prune (Looped f) = Looped (\a -> go a `liftM` f a)
   where

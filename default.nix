@@ -1,6 +1,6 @@
 { cabal, conduit, conduitCombinators, attoparsec, systemFilepath
 , unixCompat, text, regexPosix, profunctors, hspec, time
-, semigroups
+, semigroups, exceptions
 }:
 
 cabal.mkDerivation (self: {
@@ -8,8 +8,9 @@ cabal.mkDerivation (self: {
   version = "0.2.3";
   src = ./.;
   buildDepends = [
-    conduit conduitCombinators attoparsec systemFilepath
-    unixCompat text regexPosix profunctors hspec time semigroups
+    conduit conduitCombinators attoparsec systemFilepath text
+    unixCompat regexPosix profunctors hspec time semigroups
+    exceptions
   ];
   meta = {
     homepage = "https://github.com/yesodweb/Shelly.hs";

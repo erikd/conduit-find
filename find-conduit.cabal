@@ -31,6 +31,7 @@ Library
       , profunctors
       , mtl
       , semigroups
+      , exceptions
       , time
     exposed-modules:
         Data.Conduit.Find
@@ -56,4 +57,5 @@ test-suite test
       , mtl
       , time
       , semigroups
+      , exceptions
       , hspec                >= 1.4

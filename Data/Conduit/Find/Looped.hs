@@ -2,13 +2,13 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 
--- | Main entry point to the application.
 module Data.Conduit.Find.Looped where
 
 import Control.Applicative
 import Control.Arrow
 import Control.Category
 import Control.Monad
+import Control.Monad.Catch
 import Control.Monad.Trans
 import Data.Monoid hiding ((<>))
 import Data.Profunctor
@@ -139,6 +139,18 @@ instance Monad m => Arrow (Looped m) where
             RecurseOnly l -> RecurseOnly (first l)
             KeepAndRecurse b l -> KeepAndRecurse (b, c) (first l)
 
+instance MonadThrow m => MonadThrow (Looped m a) where
+  throwM e = Looped $ const $ throwM e
+
+instance MonadCatch m => MonadCatch (Looped m a) where
+  catch (Looped m) c =
+      Looped $ \r -> m r `catch` \e -> runLooped (c e) r
+  mask a = Looped $ \e -> mask $ \u -> runLooped (a $ q u) e
+    where q u (Looped b) = Looped (u . b)
+  uninterruptibleMask a =
+    Looped $ \e -> uninterruptibleMask $ \u -> runLooped (a $ q u) e
+      where q u (Looped b) = Looped (u . b)
+
 -- | Within a predicate block, 'consider' a different item than what is
 --   currently being predicated upon.  This makes it possible to write custom
 --   logic within the Monad instance for a predicate, such as in this
@@ -211,6 +223,15 @@ liftKleisli :: Monad m => (a -> m b) -> Looped m a b
 liftKleisli f = Looped $ \a -> do
     r <- f a
     return $ KeepAndRecurse r (liftKleisli f)
+
+lowerKleisli :: Monad m => Looped m a b -> a -> m b
+lowerKleisli (Looped f) a = do
+    r <- f a
+    case r of
+        Ignore -> fail "Ignore"
+        Keep b -> return b
+        RecurseOnly _ -> fail "RecurseOnly"
+        KeepAndRecurse b _ -> return b
 
 liftKleisliMaybe :: Monad m => (a -> m (Maybe b)) -> Looped m a b
 liftKleisliMaybe f = Looped $ \a -> do

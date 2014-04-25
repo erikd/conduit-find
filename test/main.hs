@@ -26,7 +26,7 @@ main = hspec $ do
             xs <- runResourceT $
                 find "."
                     (    ignoreVcs
-                     >>> prune (filename_ "dist")
+                     >>> prune (filename_ (== "dist"))
                      >>> glob "*.hs"
                      >>> not_ (glob "Setup*")
                      >>> regular
@@ -47,7 +47,7 @@ main = hspec $ do
                      >>> not_ (glob "Setup*")
                      -- This prune only applies to .hs files now, so it won't
                      -- match anything, thus having no effect but burning CPU!
-                     >>> prune (filename_ "dist")
+                     >>> prune (filename_ (== "dist"))
                      >>> regular
                      >>> not_ executable
                     )
@@ -62,7 +62,7 @@ main = hspec $ do
             xs <- runResourceT $
                 findWithPreFilter "." True
                     (    ignoreVcs
-                     >>> prune (filename_ "dist")
+                     >>> prune (filename_ (== "dist"))
                      >>> glob "*.hs"
                      >>> not_ (glob "Setup*")
                     )
@@ -81,7 +81,7 @@ main = hspec $ do
                 findWithPreFilter "." True
                     (    ignoreVcs
                      >>> prune (depth (>=1))
-                     >>> prune (filename_ "dist")
+                     >>> prune (filename_ (== "dist"))
                      >>> glob "*.hs"
                      >>> not_ (glob "Setup*")
                     )

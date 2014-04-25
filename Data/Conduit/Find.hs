@@ -18,7 +18,12 @@ module Data.Conduit.Find
     , regular
     , executable
     , filename_
+    , filenameS_
+    , filepath_
+    , filepathS_
     , depth
+    , lastAccessed
+    , lastModified
     , withPath
     , withStatus
     , prune
@@ -43,6 +48,8 @@ import Data.Bits
 import Data.Conduit.Find.Looped
 import Data.Monoid
 import Data.Text (Text, unpack, pack)
+import Data.Time
+import Data.Time.Clock.POSIX
 import Filesystem.Path.CurrentOS (FilePath, encodeString, filename)
 import Prelude hiding (FilePath)
 import System.Posix.Files
@@ -146,7 +153,7 @@ regexMatcher accessor (unpack -> pat) = go
 
 -- | Find every entry whose filename part matching the given regular expression.
 regex :: (Monad m, HasFileInfo e) => Text -> Predicate m e
-regex = regexMatcher filename
+regex pat = filenameS_ (=~ unpack pat)
 
 -- | Find every entry whose filename part matching the given filename globbing
 --   expression.  For example: @glob "*.hs"@.
@@ -197,11 +204,26 @@ regular = status isRegularFile
 executable :: Monad m => Predicate m FileEntry
 executable = status (\s -> fileMode s .&. ownerExecuteMode /= 0)
 
-filename_ :: (Monad m, HasFileInfo e) => FilePath -> Predicate m e
-filename_ path = if_ ((== path) . filename . entryPath)
+filename_ :: (Monad m, HasFileInfo e) => (FilePath -> Bool) -> Predicate m e
+filename_ f = if_ (f . filename . entryPath)
+
+filenameS_ :: (Monad m, HasFileInfo e) => (String -> Bool) -> Predicate m e
+filenameS_ f = if_ (f . encodeString . filename . entryPath)
+
+filepath_ :: (Monad m, HasFileInfo e) => (FilePath -> Bool) -> Predicate m e
+filepath_ f = if_ (f . entryPath)
+
+filepathS_ :: (Monad m, HasFileInfo e) => (String -> Bool) -> Predicate m e
+filepathS_ f = if_ (f . encodeString . entryPath)
 
 depth :: (Monad m, HasFileInfo e) => (Int -> Bool) -> Predicate m e
 depth f = if_ (f . infoDepth . getFileInfo)
+
+lastAccessed :: Monad m => (UTCTime -> Bool) -> Predicate m FileEntry
+lastAccessed f = status (f . posixSecondsToUTCTime . accessTimeHiRes)
+
+lastModified :: Monad m => (UTCTime -> Bool) -> Predicate m FileEntry
+lastModified f = status (f . posixSecondsToUTCTime . modificationTimeHiRes)
 
 test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
 test matcher path =

@@ -29,6 +29,7 @@ Library
       , regex-posix
       , profunctors
       , mtl
+      , time
     exposed-modules:
         Data.Conduit.Find
     other-modules:
@@ -51,4 +52,5 @@ test-suite test
       , text                 >= 0.11.3.1
       , regex-posix
       , mtl
+      , time
       , hspec                >= 1.4

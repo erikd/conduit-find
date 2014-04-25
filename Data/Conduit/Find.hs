@@ -76,8 +76,6 @@ instance HasFileInfo FileEntry where
     getFileInfo = entryInfo
     {-# INLINE getFileInfo #-}
 
-type Predicate m a = Looped m a a
-
 -- | Walk through the entries of a directory tree, allowing the user to
 --   specify a 'Predicate' which may decides not only which entries to yield
 --   from the conduit, but also which directories to follow, and how to

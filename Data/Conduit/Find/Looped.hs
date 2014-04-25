@@ -181,22 +181,6 @@ and_ (Looped f) (Looped g) = Looped $ \a -> do
         Recurse l -> return $ Recurse l
         KeepAndRecurse _ _ -> g a
 
-not_ :: MonadIO m => Looped m a a -> Looped m a a
-not_ (Looped f) = Looped (\a -> go a `liftM` f a)
-  where
-    go a Ignore = Keep a
-    go _ (Keep _) = Ignore
-    go a (Recurse l) = KeepAndRecurse a (not_ l)
-    go _ (KeepAndRecurse _ l) = Recurse (not_ l)
-
-prune :: MonadIO m => Looped m a a -> Looped m a a
-prune (Looped f) = Looped (\a -> go a `liftM` f a)
-  where
-    go a Ignore = Keep a
-    go _ (Keep _) = Ignore
-    go a (Recurse l) = KeepAndRecurse a (prune l)
-    go _ (KeepAndRecurse _ _) = Ignore
-
 promote :: Monad m => (a -> m (Maybe b)) -> Looped m a b
 promote f = Looped $ \a -> do
     r <- f a
@@ -212,3 +196,31 @@ demote (Looped f) a = do
         Keep b -> Just b
         Recurse _ -> Nothing
         KeepAndRecurse b _ -> Just b
+
+type Predicate m a = Looped m a a
+
+-- instance (Functor m, Monad m) => Alternative (Predicate m) where
+--     empty = let x = Looped (\a -> return $ KeepAndRecurse a x) in x
+--     Looped f <|> Looped g = Looped $ \a -> do
+--         r <- f a
+--         case r of
+--             Ignore -> g a
+--             Keep b -> return $ Keep b
+--             Recurse _ -> g a
+--             KeepAndRecurse b m -> return $ KeepAndRecurse b m
+
+not_ :: MonadIO m => Predicate m a -> Predicate m a
+not_ (Looped f) = Looped (\a -> go a `liftM` f a)
+  where
+    go a Ignore = Keep a
+    go _ (Keep _) = Ignore
+    go a (Recurse l) = KeepAndRecurse a (not_ l)
+    go _ (KeepAndRecurse _ l) = Recurse (not_ l)
+
+prune :: MonadIO m => Predicate m a -> Predicate m a
+prune (Looped f) = Looped (\a -> go a `liftM` f a)
+  where
+    go a Ignore = Keep a
+    go _ (Keep _) = Ignore
+    go a (Recurse l) = KeepAndRecurse a (prune l)
+    go _ (KeepAndRecurse _ _) = Ignore

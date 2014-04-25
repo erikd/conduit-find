@@ -5,7 +5,7 @@
 
 cabal.mkDerivation (self: {
   pname = "find-conduit";
-  version = "0.0.1";
+  version = "0.2.3";
   src = ./.;
   buildDepends = [
     conduit conduitCombinators attoparsec systemFilepath

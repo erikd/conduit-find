@@ -103,7 +103,7 @@ instance Monad m => Monad (Looped m a) where
             KeepAndRecurse b _ -> runLooped (k b) a
 
 instance Monad m => Category (Looped m) where
-    id = let x = Looped $ \a -> return $ KeepAndRecurse a x in x
+    id = matchAll
     Looped f . Looped g = Looped $ \a -> do
           r <- g a
           case r of
@@ -139,15 +139,15 @@ instance Monad m => Arrow (Looped m) where
 
 -- | Within a predicate block, 'consider' a different item than what is
 --   currently being predicated upon.  This makes it possible to write custom
---   logic within the Monad instance for Looped, such as in this contrived
---   example:
+--   logic within the Monad instance for a predicate, such as in this
+--   contrived example:
 --
 -- @
---   flip runLooped "bar.hs" $ do
---       x <- filename_ (== "foo.hs")
---       when (x /= "") $
---           consider "baz.hs" $
---               filename_ (== "baz.hs")    -- passes
+--   flip runLooped \"bar.hs\" $ do
+--       x <- filename_ (== \"foo.hs\")
+--       when (x /= \"\") $
+--           consider \"baz.hs\" $
+--               filename_ (== \"baz.hs\")
 -- @
 consider :: a -> Looped m a b -> Looped m a b
 consider x l = Looped $ const $ runLooped l x
@@ -242,7 +242,7 @@ instance (Functor m, Monad m) => Monoid (Predicate m a) where
     f `mappend` g = f <> g
 
 instance Monad m => MonadPlus (Looped m a) where
-    mzero = Looped $ const $ return Ignore
+    mzero = ignoreAll
     Looped f `mplus` Looped g = Looped $ \a -> do
         r <- f a
         case r of
@@ -251,11 +251,18 @@ instance Monad m => MonadPlus (Looped m a) where
             RecurseOnly _ -> g a
             KeepAndRecurse b m -> return $ KeepAndRecurse b m
 
+-- | 'matchAll' is id in the 'Predicate' Category.
 matchAll :: Monad m => Predicate m a
 matchAll = Looped $ \entry -> return $ KeepAndRecurse entry matchAll
 
+-- | 'ignore' rejects the current entry, but allows recursion.
+ignore :: Monad m => Looped m a b
+ignore = Looped $ const $ return $ RecurseOnly ignore
+
+-- | 'ignoreAll' rejects every entry, and does not recurse.  This is the same
+--   as 'mzero'.
 ignoreAll :: Monad m => Looped m a b
-ignoreAll = Looped $ const $ return $ RecurseOnly ignoreAll
+ignoreAll = Looped $ const $ return Ignore
 
 -- | 'not_' reverse the meaning of the given predicate, preserving recursion.
 not_ :: MonadIO m => Predicate m a -> Predicate m a

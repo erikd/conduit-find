@@ -1,5 +1,5 @@
 Name:                find-conduit
-Version:             0.2.1
+Version:             0.2.3
 Synopsis:            A file-finding conduit that allows user control over traversals.
 License-file:        LICENSE
 License:             MIT
@@ -9,7 +9,8 @@ Build-Type:          Simple
 Cabal-Version:       >=1.10
 Category:            System
 Description:
-  A file-finding conduit that allows user control over traversals.
+  A file-finding conduit that allows user control over traversals.  Please see
+  the module 'Data.Conduit.Find' for more information.
 
 Source-repository head
   type: git

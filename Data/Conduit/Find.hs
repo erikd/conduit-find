@@ -1,43 +1,65 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ViewPatterns #-}
 
 module Data.Conduit.Find
-    ( FileEntry(..)
-    , Predicate
-    , HasFileInfo(..)
-    , consider
-    , entryPath
-    , matchAll
-    , ignoreAll
-    , ignoreVcs
-    , regex
-    , glob
-    , stat
-    , lstat
-    , regular
-    , hasMode
-    , executable
-    , filename_
-    , filenameS_
-    , filepath_
-    , filepathS_
-    , depth
-    , lastAccessed
-    , lastModified
-    , withPath
-    , withStatus
-    , prune
-    , test
-    , find
+    (
+    -- * Introduction
+    -- $intro
+
+    -- ** Basic comparison with GNU find
+    -- $gnufind
+
+    -- ** Performance
+    -- $performance
+
+    -- ** Other notes
+    -- $notes
+
+    -- * Finding functions
+      find
     , find'
     , lfind
     , lfind'
     , findWithPreFilter
     , readPaths
+    , stat
+    , lstat
+    , test
+
+    -- * File path predicates
+    , ignoreVcs
+    , regex
+    , glob
+    , filename_
+    , filenameS_
+    , filepath_
+    , filepathS_
+    , withPath
+    , entryPath
+
+    -- * File entry predicates (uses stat information)
+    , regular
+    , hasMode
+    , executable
+    , depth
+    , lastAccessed
+    , lastModified
+    , withStatus
+
+    -- * Predicate combinators
     , or_
     , and_
     , not_
+    , prune
+    , matchAll
+    , ignoreAll
+    , consider
+    , (=~)
+
+    -- * Types and type classes
+    , FileEntry(..)
+    , Predicate
+    , HasFileInfo(..)
     ) where
 
 import Conduit
@@ -55,7 +77,125 @@ import Filesystem.Path.CurrentOS (FilePath, encodeString, filename)
 import Prelude hiding (FilePath)
 import System.Posix.Files
 import System.Posix.Types
-import Text.Regex.Posix ((=~))
+import qualified Text.Regex.Posix as R ((=~))
+
+{- $intro
+
+**find-conduit** is essentially a souped version of GNU find for Haskell,
+using a DSL to provide both ease of us, and extensive flexbility.
+
+In its simplest form, let's compare some uses of find to find-conduit.  Bear
+in mind that the result of the find function is a conduit, so you're expected
+to either sink it to a list, or operate on the file paths as they are yielded.
+-}
+
+{- $gnufind
+
+A typical find command:
+
+@
+find src -name '*.hs' -type f -print
+@
+
+Would in find-conduit be:
+
+@
+find "src" (glob "*.hs" \<\> regular) $$ mapM_C (liftIO . print)
+@
+
+The 'glob' predicate matches the file basename against the globbing pattern,
+while the 'regular' predicate matches plain files.
+
+A more complicated example:
+
+@
+find . -size +100M -perm 644 -mtime 1
+@
+
+Now in find-conduit:
+
+@
+let megs = 1024 * 1024
+    days = 86400
+now <- liftIO getCurrentTime
+find \".\" ( fileSize (> 100*megs)
+        \<\> hasMode 0o644
+        \<\> lastModified (> addUTCTime now (-(1*days)))
+         )
+@
+
+Appending predicates like this expressing an "and" relationship.  Use '<|>' to
+express "or".  You can also negate any predicate:
+
+@
+find \".\" (not_ (hasMode 0o644))
+@
+
+By default, predicates, whether matching or not, will allow recursion into
+directories.  In order to express that matching predicate should disallow
+recursion, use 'prune':
+
+@
+find \".\" (prune (depth (> 2)))
+@
+
+This is the same as using '-maxdepth 2' in find.
+
+@
+find \".\" (prune (filename_ (== "dist")))
+@
+
+This is the same as:
+
+@
+find . \\( -name dist -prune \\) -o -print
+@
+-}
+
+{- $performance
+
+find-conduit strives to make file-finding a well performing operation.  To
+this end, a composed Predicate will only call stat once per entry being
+considered; and if you prune a directory, it is not traversed at all.
+
+By default, 'find' calls stat for every file before it applies the predicate,
+in order to ensure that only one such call is needed.  Sometimes, however, you
+know just from the FilePath that you don't want to consider a certain file, or
+you want to prune a directory tree.
+
+To support these types of optimized queries, a variant of find is provided
+called 'findWithPreFilter'.  This takes two predicates: one that is applied to
+only the FilePath, before stat (or lstat) is called; and one that is applied
+to the full file information after the stat.
+-}
+
+{- $notes
+
+Predicates form a Category and an Arrow, so you can use Arrow-style
+composition rather than Monoids if you wish.  They also form an Applicative, a
+Monad and a MonadPlus.
+
+In the Monad, the value bound over is whatever the predicate chooses to return
+(most Predicates return the same FilePath they examined, however, making the
+Monad less value).  Here's an example Monad: If the find takes longer than 5
+minutes, abort.  We could have used 'timeout', but this is for illustration.
+
+@
+start <- liftIO getCurrentTime
+find \".\" $ do
+    glob \"*.hs\"
+
+    end <- liftIO getCurrentTime
+    if diffUTCTIme end start > 300
+        then ignoreAll
+        else matchAll
+@
+
+The Predicate Monad is a short-circuiting monad, meaning we stop as soon as it
+can be determined that the user is not interested in a given file.  To access
+the current file, simply bind the result value from any Predicate.  To change
+the file being matched against,for whatever reason, use 'consider'.
+-}
 
 data FileInfo = FileInfo
     { infoPath  :: FilePath
@@ -98,9 +238,23 @@ ignoreVcs = Looped $ \entry ->
   where
     vcsDirs = [ ".git", "CVS", "RCS", "SCCS", ".svn", ".hg", "_darcs" ]
 
--- | Find every entry whose filename part matching the given regular expression.
 regex :: (Monad m, HasFileInfo e) => Text -> Predicate m e
-regex pat = filenameS_ (=~ unpack pat)
+regex pat = filename_ (=~ pat)
+
+-- | This is a re-export of 'Text.Regex.Posix.=~', with the types changed for
+--   ease of use with this module.  For example, you can simply say:
+--
+-- @
+--    filename_ (=~ "\\.hs$")
+-- @
+--
+-- Which is the same thing as:
+--
+-- @
+--    regex "\\.hs$"
+-- @
+(=~) :: FilePath -> Text -> Bool
+str =~ pat = encodeString str R.=~ unpack pat
 
 -- | Find every entry whose filename part matching the given filename globbing
 --   expression.  For example: @glob "*.hs"@.

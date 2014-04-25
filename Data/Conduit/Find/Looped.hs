@@ -46,6 +46,7 @@ instance (Functor m, Monad m) => Applicative (Result m a) where
 
 instance Monad m => Monad (Result m a) where
     return = Keep
+    fail _ = Ignore
     Ignore >>= _ = Ignore
     Keep a >>= f = case f a of
         Ignore -> Ignore
@@ -94,6 +95,7 @@ instance (Functor m, Monad m) => Applicative (Looped m a) where
 
 instance Monad m => Monad (Looped m a) where
     return = Looped . const . return . return
+    fail _ = mzero
     Looped f >>= k = Looped $ \a -> do
         r <- f a
         case r of

@@ -8,10 +8,11 @@
 module Data.Cond
     ( Result(..), toResult, fromResult
     , CondT(..), runCondT, Cond, runCond
-    , if_, ifM_, apply, test
-    , reject, rejectAll, norecurse
-    , or_, (||:), and_, (&&:), not_, prune
-    , traverseRecursively
+    , guard_, guardM_, guardAll_, guardAllM_, apply, test
+    , reject, rejectAll, prune, pruneWhen_
+    , or_, (||:), and_, (&&:), not_
+    , if_, when_
+    , Iterator(..), recCondFoldMap
     ) where
 
 import Control.Applicative
@@ -19,6 +20,7 @@ import Control.Arrow (first)
 import Control.Monad
 import Control.Monad.Base
 import Control.Monad.Catch
+import Control.Monad.Morph
 import Control.Monad.Reader.Class
 import Control.Monad.State.Class
 import Control.Monad.Trans
@@ -55,6 +57,12 @@ instance Monad m => Functor (Result a m) where
     fmap f (Keep a)             = Keep (f a)
     fmap f (RecurseOnly l)      = RecurseOnly (liftM (fmap f) l)
     fmap f (KeepAndRecurse a l) = KeepAndRecurse (f a) (liftM (fmap f) l)
+
+instance MFunctor (Result a) where
+    hoist _ Ignore                 = Ignore
+    hoist _ (Keep a)               = Keep a
+    hoist nat (RecurseOnly l)      = RecurseOnly (fmap (hoist nat) l)
+    hoist nat (KeepAndRecurse a l) = KeepAndRecurse a (fmap (hoist nat) l)
 
 instance Semigroup (Result a m b) where
     Ignore        <> _                  = Ignore
@@ -96,20 +104,20 @@ fromResult (KeepAndRecurse a _) = Just a
 --   performing recursive iterations (see the 'Result' type above).
 --
 --   You can promote functions of type @a -> m (Maybe b)@ into 'CondT' using
---   'apply'.  Pure functions @a -> Bool@ are lifted with 'if_', and
---   @a -> m Bool@ with 'ifM_'.  In effect, @if_ f@ is the same as
+--   'apply'.  Pure functions @a -> Bool@ are lifted with 'guard_', and
+--   @a -> m Bool@ with 'ifM_'.  In effect, @guard_ f@ is the same as
 --   @ask >>= guard . f@.
 --
 --   Here is a trivial example:
 --
 -- @
 --   flip runCondT 42 $ do
---     if_ even
+--     guard_ even
 --     liftIO $ putStrLn "42 must be even to reach here"
 --
---     if_ odd <|> if_ even
---     if_ even &&: if_ (== 42)
---     if_ ((== 0) . (`mod` 6))
+--     guard_ odd <|> guard_ even
+--     guard_ even &&: guard_ (== 42)
+--     guard_ ((== 0) . (`mod` 6))
 -- @
 --
 --   'CondT' is typically invoked using 'runCondT', in which case it maps 'a'
@@ -201,6 +209,9 @@ instance MonadBaseControl b m => MonadBaseControl b (CondT r m) where
     {-# INLINE liftBaseWith #-}
     {-# INLINE restoreM #-}
 
+instance MFunctor (CondT a) where
+    hoist nat (CondT m) = CondT $ hoist nat (liftM (hoist nat) m)
+
 runCondT :: Monad m => CondT a m b -> a -> m (Maybe b)
 runCondT (CondT f) a = do
     r <- evalStateT f a
@@ -213,11 +224,29 @@ runCondT (CondT f) a = do
 runCond :: Cond a b -> a -> Maybe b
 runCond = (runIdentity .) . runCondT
 
-if_ :: Monad m => (a -> Bool) -> CondT a m ()
-if_ f = ask >>= guard . f
+guard_ :: Monad m => (a -> Bool) -> CondT a m ()
+guard_ f = ask >>= guard . f
 
-ifM_ :: Monad m => (a -> m Bool) -> CondT a m ()
-ifM_ f = ask >>= lift . f >>= guard
+guardAll_ :: Monad m => (a -> Bool) -> CondT a m ()
+guardAll_ f = ask >>= (`unless` rejectAll)  . f
+
+if_ :: Monad m => CondT a m b -> CondT a m c -> CondT a m c -> CondT a m c
+if_ c x y = CondT $ do
+    r <- getCondT c
+    getCondT $ case r of
+        Ignore             -> y
+        Keep _             -> x
+        RecurseOnly _      -> y
+        KeepAndRecurse _ _ -> x
+
+when_ :: Monad m => CondT a m b -> CondT a m () -> CondT a m ()
+when_ c x = if_ c x (return ())
+
+guardM_ :: Monad m => (a -> m Bool) -> CondT a m ()
+guardM_ f = ask >>= lift . f >>= guard
+
+guardAllM_ :: Monad m => (a -> m Bool) -> CondT a m ()
+guardAllM_ f = ask >>= lift . f >>= \x -> unless x rejectAll
 
 apply :: Monad m => (a -> m (Maybe b)) -> CondT a m b
 apply f = CondT $ liftM toResult . lift . f =<< get
@@ -225,21 +254,18 @@ apply f = CondT $ liftM toResult . lift . f =<< get
 test :: Monad m => CondT a m b -> a -> m Bool
 test = (liftM isJust .) . runCondT
 
--- | 'reject' rejects the current entry, but allows recursion.  This is the
---   same as 'mzero'.
+-- | 'reject' rejects the current entry, but allows recursion into its
+--   descendents.  This is the same as 'mzero'.
 reject :: Monad m => CondT a m b
 reject = mzero
 
--- | 'rejectAll' rejects the entry and all of its descendents.
 rejectAll :: Monad m => CondT a m b
-rejectAll = CondT $ return Ignore
+rejectAll = prune >> reject
 
--- | 'norecurse' indicates that recursion should not be performed on the current
---   item.  Note that this library doesn't perform any actual recursion; that
---   is up to the consumer of the final 'Result' value, typically
---   'applyCondT'.
-norecurse :: Monad m => CondT a m ()
-norecurse = CondT $ return (Keep ())
+-- | 'prune' prevents recursion into the current entry's descendent, but does
+--   not reject the entry itself.
+prune :: Monad m => CondT a m ()
+prune = CondT $ return $ Keep ()
 
 or_ :: Monad m => NonEmpty (CondT a m b) -> CondT a m b
 or_ = foldr1 mplus
@@ -252,49 +278,33 @@ and_ :: Monad m => [CondT a m b] -> CondT a m [b]
 and_ = foldl' (\acc x -> (:) <$> x <*> acc) (return [])
 
 infixr 2 ||:
-(&&:) :: Monad m => CondT a m b -> CondT a m c -> CondT a m (b, c)
-(&&:) = liftM2 (,)
+(&&:) :: (Monad m, Semigroup b) => CondT a m b -> CondT a m b -> CondT a m b
+(&&:) = liftM2 (<>)
 
 -- | 'not_' inverts the meaning of the given predicate while preserving
 --   recursion.
-not_ :: Monad m => CondT a m () -> CondT a m ()
-not_ (CondT f) = CondT $ go `liftM` f
-  where
-    go Ignore               = accept ()
-    go (Keep _)             = recurse
-    go (RecurseOnly _)      = accept ()
-    go (KeepAndRecurse _ _) = recurse
+not_ :: Monad m => CondT a m b -> CondT a m ()
+not_ c = when_ c reject
 
--- | 'prune' is like 'not_', but does not preserve recursion.  It should be read
---   as "prune this entry and all its descendents if the predicate matches".
---   It is the same as @x ||: rejectAll@.
-prune :: Monad m => CondT a m () -> CondT a m ()
-prune (CondT f) = CondT $ go `liftM` f
-  where
-    go Ignore               = accept ()
-    go (Keep _)             = Ignore
-    go (RecurseOnly _)      = accept ()
-    go (KeepAndRecurse _ _) = Ignore
+pruneWhen_ :: Monad m => CondT a m b -> CondT a m ()
+pruneWhen_ c = when_ c rejectAll
 
--- | This function expresses the pattern of recursive traversal, directed by a
---   'CondT' predicate.  It does not require that the structure being traversed
---   in memory, as it might very well be a filesystem, the decision tree of an
---   algorithm, etc.  It works very nicely with conduits, in order to iterate
---   over the traversal in constant space.
-traverseRecursively :: (Monad m, Monad n)
-                    => a
-                    -> CondT a m b
-                    -> (a -> b -> n ())
-                    -> (forall x. m x -> n x)
-                    -> (a -> (a -> n ()) -> n ())
-                    -> n ()
-traverseRecursively a c f trans getChildren = do
-    r <- trans $ evalStateT (getCondT c) a
+newtype Iterator a m b = Iterator
+    { runIterator :: (a -> (b -> m b) -> Iterator a m b -> m b) -> m b }
+
+recCondFoldMap :: (MonadIO m, Monoid b, Show a, Show b)
+               => CondT a m b
+               -> Iterator a m b
+               -> m b
+recCondFoldMap cond iter = runIterator iter $ \x f next -> do
+    liftIO $ putStrLn $ "recCondFoldMap Cond.hs:300.." ++ show x
+    r <- evalStateT (getCondT cond) x
+    liftIO $ putStrLn $ "recCondFoldMap Cond.hs:302.." ++ show r
     case r of
-        Ignore             -> return ()
-        Keep b             -> f a b
-        RecurseOnly m      -> descend (fromMaybe c m)
-        KeepAndRecurse b m -> f a b >> descend (fromMaybe c m)
-  where
-    descend next = getChildren a $ \child ->
-        traverseRecursively child next f trans getChildren
+        Ignore -> return mempty
+        Keep c -> f c
+        RecurseOnly cond' ->
+            recCondFoldMap (fromMaybe cond cond') next
+        KeepAndRecurse c cond' ->
+            liftM2 mappend (f c)
+                (recCondFoldMap (fromMaybe cond cond') next)

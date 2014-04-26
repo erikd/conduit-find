@@ -56,6 +56,7 @@ module Data.Conduit.Find
 import           Conduit
 import           Control.Applicative
 import           Control.Monad
+import           Control.Monad.Morph
 import           Control.Monad.State.Class
 import           Data.Attoparsec.Text
 import           Data.Bits
@@ -187,7 +188,7 @@ newFileEntry p d = FileEntry p d Nothing
 -- | Return all entries, except for those within version-control metadata
 --   directories (and not including the version control directory itself either).
 ignoreVcs :: Monad m => Predicate m FileEntry
-ignoreVcs = prune (filename_ (`elem` vcsDirs))
+ignoreVcs = pruneWhen_ (filename_ (`elem` vcsDirs))
   where
     vcsDirs = [ ".git", "CVS", "RCS", "SCCS", ".svn", ".hg", "_darcs" ]
 
@@ -251,7 +252,7 @@ getStatus e = fromMaybe
 withFileStatus :: Monad m
                => (FileStatus -> m Bool)
                -> Predicate m FileEntry
-withFileStatus f = ifM_ (f . getStatus)
+withFileStatus f = guardM_ (f . getStatus)
 
 status :: Monad m => (FileStatus -> Bool) -> Predicate m FileEntry
 status f = withFileStatus (return . f)
@@ -271,7 +272,7 @@ executable = hasMode ownerExecuteMode
 withPath :: Monad m
          => (FilePath -> m Bool)
          -> Predicate m FileEntry
-withPath f = ifM_ (f . entryPath)
+withPath f = guardM_ (f . entryPath)
 
 filename_ :: Monad m => (FilePath -> Bool) -> Predicate m FileEntry
 filename_ f = withPath (return . f . filename)
@@ -286,7 +287,7 @@ filepathS_ :: Monad m => (String -> Bool) -> Predicate m FileEntry
 filepathS_ f = withPath (return . f . encodeString)
 
 depth :: Monad m => (Int -> Bool) -> Predicate m FileEntry
-depth f = if_ (f . entryDepth)
+depth f = guard_ (f . entryDepth)
 
 withStatusTime :: Monad m
                => (UTCTime -> Bool) -> (FileStatus -> POSIXTime)
@@ -318,27 +319,25 @@ lastModified = flip withStatusTime modificationTimeHiRes
 -- @localM lstat@ at the point where you need 'FileStatus' information.
 findRaw :: (MonadIO m, MonadResource m)
         => FilePath -> Bool -> Predicate m FileEntry -> Source m FileEntry
-findRaw path follow predicate =
-    traverseRecursively
-        (newFileEntry path 0)
-        predicate
-        (const . yield)
-        lift
-        readDirectory
+findRaw startPath follow predicate =
+    recCondFoldMap (hoist lift predicate) $
+        Iterator (iter (newFileEntry startPath 0))
   where
-    readDirectory (FileEntry p d mst) go = do
-        -- If no status has been determined yet, we must now in order to know
-        -- whether to traverse or not.
-        recurse <- isDirectory <$> case mst of
-            Nothing -> liftIO $ (if follow
-                                 then getFileStatus
-                                 else getSymbolicLinkStatus)
-                              $ encodeString p
-            Just st -> return st
-        when recurse $
-            (sourceDirectory p =$) $ awaitForever $ \fp ->
-                mapInput (const ()) (const Nothing) $
-                    go $ newFileEntry fp (succ d)
+    iter x@(FileEntry path d mstat) this =
+        this x (const (yield x)) $ Iterator $ \next -> do
+            -- If no status has been determined yet, we must do so now in
+            -- order to know whether to traverse or not.
+            st <- case mstat of
+                Nothing -> liftIO $ (if follow
+                                     then getFileStatus
+                                     else getSymbolicLinkStatus)
+                                  $ encodeString path
+                Just st -> return st
+
+            when (isDirectory st) $
+                (sourceDirectory path =$) $ awaitForever $ \fp ->
+                    mapInput (const ()) (const Nothing) $
+                        iter (newFileEntry fp (succ d)) next
 
 basicFind :: (MonadIO m, MonadResource m)
           => Predicate m FileEntry
@@ -347,7 +346,7 @@ basicFind :: (MonadIO m, MonadResource m)
           -> Predicate m FileEntry
           -> Source m FileEntry
 basicFind f follow path pr = findRaw path follow $
-    f >> (directory ||: norecurse) >> pr
+    f >> (directory ||: prune) >> pr
 
 find' :: (MonadIO m, MonadResource m)
       => FilePath -> Predicate m FileEntry

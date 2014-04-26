@@ -1,5 +1,5 @@
 Name:                find-conduit
-Version:             0.2.3
+Version:             0.3.0
 Synopsis:            A file-finding conduit that allows user control over traversals.
 License-file:        LICENSE
 License:             MIT
@@ -34,6 +34,7 @@ Library
       , time
       , transformers
       , transformers-base
+      , mmorph
       , monad-control
     exposed-modules:
         Data.Conduit.Find
@@ -63,4 +64,5 @@ test-suite test
       , transformers
       , transformers-base
       , monad-control
+      , mmorph
       , hspec                >= 1.4

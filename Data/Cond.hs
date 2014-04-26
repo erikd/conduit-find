@@ -171,7 +171,7 @@ instance Monad m => MonadState a (CondT a m) where
     state f = CondT $ state (fmap (first accept') f)
 
 instance Monad m => MonadPlus (CondT a m) where
-    mzero = ignore
+    mzero = CondT $ return recurse'
     CondT f `mplus` CondT g = CondT $ do
         r <- f
         case r of

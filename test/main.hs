@@ -3,7 +3,6 @@
 module Main where
 
 import Conduit
-import Control.Arrow
 import Data.Conduit.Find
 import Test.Hspec
 
@@ -11,7 +10,7 @@ main :: IO ()
 main = hspec $ do
     describe "basic tests" $ do
         it "file passes a test" $ do
-            res <- test (regular >>> not_ executable) "README.md"
+            res <- test (regular >> not_ executable) "README.md"
             res `shouldBe` True
 
         it "file fails a test" $ do
@@ -19,18 +18,18 @@ main = hspec $ do
             res `shouldBe` False
 
         it "file fails another test" $ do
-            res <- test (regular >>> executable) "README.md"
+            res <- test (regular >> executable) "README.md"
             res `shouldBe` False
 
         it "finds files" $ do
             xs <- runResourceT $
                 find "."
                     (    ignoreVcs
-                     >>> prune (filename_ (== "dist"))
-                     >>> glob "*.hs"
-                     >>> not_ (glob "Setup*")
-                     >>> regular
-                     >>> not_ executable
+                     >> prune (filename_ (== "dist"))
+                     >> glob "*.hs"
+                     >> not_ (glob "Setup*")
+                     >> regular
+                     >> not_ executable
                     )
                     $$ sinkList
 
@@ -43,13 +42,13 @@ main = hspec $ do
             xs <- runResourceT $
                 find "."
                     (    ignoreVcs
-                     >>> glob "*.hs"
-                     >>> not_ (glob "Setup*")
+                     >> glob "*.hs"
+                     >> not_ (glob "Setup*")
                      -- This prune only applies to .hs files now, so it won't
                      -- match anything, thus having no effect but burning CPU!
-                     >>> prune (filename_ (== "dist"))
-                     >>> regular
-                     >>> not_ executable
+                     >> prune (filename_ (== "dist"))
+                     >> regular
+                     >> not_ executable
                     )
                     $$ sinkList
 
@@ -60,15 +59,14 @@ main = hspec $ do
 
         it "finds files using a pre-pass filter" $ do
             xs <- runResourceT $
-                findWithPreFilter "." True
-                    (    ignoreVcs
-                     >>> prune (filename_ (== "dist"))
-                     >>> glob "*.hs"
-                     >>> not_ (glob "Setup*")
-                    )
-                    (    regular
-                     >>> not_ executable
-                    )
+                findRaw "." True
+                    (do ignoreVcs
+                        prune (filename_ (== "dist"))
+                        glob "*.hs"
+                        not_ (glob "Setup*")
+                        stat
+                        regular
+                        not_ executable)
                     =$ mapC entryPath $$ sinkList
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
@@ -78,16 +76,15 @@ main = hspec $ do
 
         it "properly applies post-pass pruning" $ do
             xs <- runResourceT $
-                findWithPreFilter "." True
-                    (    ignoreVcs
-                     >>> prune (depth (>=1))
-                     >>> prune (filename_ (== "dist"))
-                     >>> glob "*.hs"
-                     >>> not_ (glob "Setup*")
-                    )
-                    (    regular
-                     >>> not_ executable
-                    )
+                findRaw "." True
+                    (do ignoreVcs
+                        prune (depth (>=1))
+                        prune (filename_ (== "dist"))
+                        glob "*.hs"
+                        not_ (glob "Setup*")
+                        stat
+                        regular
+                        not_ executable)
                     =$ mapC entryPath $$ sinkList
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` False

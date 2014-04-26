@@ -20,11 +20,10 @@ module Data.Conduit.Find
     , find'
     , lfind
     , lfind'
-    , findWithPreFilter
-    , readPaths
     , stat
     , lstat
     , test
+    , findRaw
 
     -- * File path predicates
     , ignoreVcs
@@ -35,7 +34,6 @@ module Data.Conduit.Find
     , filepath_
     , filepathS_
     , withPath
-    , entryPath
 
     -- * File entry predicates (uses stat information)
     , regular
@@ -44,39 +42,33 @@ module Data.Conduit.Find
     , depth
     , lastAccessed
     , lastModified
-    , withStatus
+    , withFileStatus
 
     -- * Predicate combinators
-    , or_
-    , and_
-    , not_
-    , prune
-    , matchAll
-    , ignoreAll
-    , consider
+    , module Cond
     , (=~)
 
     -- * Types and type classes
     , FileEntry(..)
-    , Predicate
-    , HasFileInfo(..)
     ) where
 
-import Conduit
-import Control.Applicative
-import Control.Arrow
-import Control.Monad
-import Data.Attoparsec.Text
-import Data.Bits
-import Data.Conduit.Find.Looped
-import Data.Monoid
-import Data.Text (Text, unpack, pack)
-import Data.Time
-import Data.Time.Clock.POSIX
-import Filesystem.Path.CurrentOS (FilePath, encodeString, filename)
-import Prelude hiding (FilePath)
-import System.Posix.Files
-import System.Posix.Types
+import           Conduit
+import           Control.Applicative
+import           Control.Monad
+import           Control.Monad.State.Class
+import           Data.Attoparsec.Text
+import           Data.Bits
+import qualified Data.Cond as Cond
+import           Data.Cond hiding (test)
+import           Data.Maybe (fromMaybe)
+import           Data.Monoid
+import           Data.Text (Text, unpack, pack)
+import           Data.Time
+import           Data.Time.Clock.POSIX
+import           Filesystem.Path.CurrentOS (FilePath, encodeString, filename)
+import           Prelude hiding (FilePath)
+import           System.Posix.Files
+import           System.Posix.Types
 import qualified Text.Regex.Posix as R ((=~))
 
 {- $intro
@@ -171,71 +163,34 @@ to the full file information after the stat.
 
 {- $notes
 
-Predicates form a Category and an Arrow, so you can use Arrow-style
-composition rather than Monoids if you wish.  They also form an Applicative, a
-Monad and a MonadPlus.
-
-In the Monad, the value bound over is whatever the predicate chooses to return
-(most Predicates return the same FilePath they examined, however, making the
-Monad less value).  Here's an example Monad: If the find takes longer than 5
-minutes, abort.  We could have used 'timeout', but this is for illustration.
-
-@
-start <- liftIO getCurrentTime
-find \".\" $ do
-    glob \"*.hs\"
-
-    end <- liftIO getCurrentTime
-    if diffUTCTIme end start > 300
-        then ignoreAll
-        else matchAll
-@
-
-The Predicate Monad is a short-circuiting monad, meaning we stop as soon as it
-can be determined that the user is not interested in a given file.  To access
-the current file, simply bind the result value from any Predicate.  To change
-the file being matched against,for whatever reason, use 'consider'.
+See 'Data.Cond' for more details on the Monad used to build predicates.
 -}
 
-data FileInfo = FileInfo
-    { infoPath  :: FilePath
-    , infoDepth :: Int
-    }
-
-instance Show FileInfo where
-    show info = "FileInfo " ++ show (infoPath info)
-              ++ " " ++ show (infoDepth info)
+type Predicate m a = CondT a m ()
 
 data FileEntry = FileEntry
-    { entryInfo   :: FileInfo
-    , entryStatus :: FileStatus
+    { entryPath   :: FilePath
+    , entryDepth  :: Int
+    , entryStatus :: Maybe FileStatus
+      -- ^ This is Nothing until we determine stat should be called.
     }
 
 instance Show FileEntry where
-    show entry = "FileEntry " ++ show (entryInfo entry)
+    show entry = "FileEntry "
+              ++ show (entryPath entry)
+              ++ " " ++ show (entryDepth entry)
 
-class HasFileInfo a where
-    getFileInfo :: a -> FileInfo
-
-instance HasFileInfo FileInfo where
-    getFileInfo = id
-    {-# INLINE getFileInfo #-}
-
-instance HasFileInfo FileEntry where
-    getFileInfo = entryInfo
-    {-# INLINE getFileInfo #-}
-
-entryPath :: HasFileInfo a => a -> FilePath
-entryPath = infoPath . getFileInfo
+newFileEntry :: FilePath -> Int -> FileEntry
+newFileEntry p d = FileEntry p d Nothing
 
 -- | Return all entries, except for those within version-control metadata
 --   directories (and not including the version control directory itself either).
-ignoreVcs :: (MonadIO m, HasFileInfo e) => Predicate m e
+ignoreVcs :: Monad m => Predicate m FileEntry
 ignoreVcs = prune (filename_ (`elem` vcsDirs))
   where
     vcsDirs = [ ".git", "CVS", "RCS", "SCCS", ".svn", ".hg", "_darcs" ]
 
-regex :: (Monad m, HasFileInfo e) => Text -> Predicate m e
+regex :: Monad m => Text -> Predicate m FileEntry
 regex pat = filename_ (=~ pat)
 
 -- | This is a re-export of 'Text.Regex.Posix.=~', with the types changed for
@@ -255,7 +210,7 @@ str =~ pat = encodeString str R.=~ unpack pat
 
 -- | Find every entry whose filename part matching the given filename globbing
 --   expression.  For example: @glob "*.hs"@.
-glob :: (Monad m, HasFileInfo e) => Text -> Predicate m e
+glob :: Monad m => Text -> Predicate m FileEntry
 glob g = case parseOnly globParser g of
     Left e  -> error $ "Failed to parse glob: " ++ e
     Right x -> regex ("^" <> x <> "$")
@@ -275,29 +230,36 @@ glob g = case parseOnly globParser g of
                             then ['\\', x]
                             else [x]
 
-doStat :: MonadIO m
-       => (String -> IO FileStatus) -> Looped m FileInfo FileEntry
-doStat getstatus = Looped $ \(FileInfo p d) -> do
-    s <- liftIO $ getstatus (encodeString p)
-    let entry = FileEntry (FileInfo p d) s
-    return $ if isDirectory s
-             then KeepAndRecurse entry (doStat getstatus)
-             else Keep entry
+doStat :: MonadIO m => (String -> IO FileStatus) -> Predicate m FileEntry
+doStat getstatus = do
+    entry <- get
+    s <- liftIO $ getstatus (encodeString (entryPath entry))
+    put $ entry { entryStatus = Just s }
 
-lstat :: MonadIO m => Looped m FileInfo FileEntry
+lstat :: MonadIO m => Predicate m FileEntry
 lstat = doStat getSymbolicLinkStatus
 
-stat :: MonadIO m => Looped m FileInfo FileEntry
+stat :: MonadIO m => Predicate m FileEntry
 stat = doStat getFileStatus
 
-withStatus :: Monad m => (FileStatus -> m Bool) -> Predicate m FileEntry
-withStatus f = ifM_ (f . entryStatus)
+getStatus :: FileEntry -> FileStatus
+getStatus e = fromMaybe
+    (error $ "FileStatus has not been determined for: " ++ show (entryPath e))
+    (entryStatus e)
+
+withFileStatus :: Monad m
+               => (FileStatus -> m Bool)
+               -> Predicate m FileEntry
+withFileStatus f = ifM_ (f . getStatus)
 
 status :: Monad m => (FileStatus -> Bool) -> Predicate m FileEntry
-status f = withStatus (return . f)
+status f = withFileStatus (return . f)
 
 regular :: Monad m => Predicate m FileEntry
 regular = status isRegularFile
+
+directory :: Monad m => Predicate m FileEntry
+directory = status isDirectory
 
 hasMode :: Monad m => FileMode -> Predicate m FileEntry
 hasMode m = status (\s -> fileMode s .&. m /= 0)
@@ -305,23 +267,25 @@ hasMode m = status (\s -> fileMode s .&. m /= 0)
 executable :: Monad m => Predicate m FileEntry
 executable = hasMode ownerExecuteMode
 
-withPath :: HasFileInfo a => Monad m => (FilePath -> m Bool) -> Predicate m a
+withPath :: Monad m
+         => (FilePath -> m Bool)
+         -> Predicate m FileEntry
 withPath f = ifM_ (f . entryPath)
 
-filename_ :: (Monad m, HasFileInfo e) => (FilePath -> Bool) -> Predicate m e
+filename_ :: Monad m => (FilePath -> Bool) -> Predicate m FileEntry
 filename_ f = withPath (return . f . filename)
 
-filenameS_ :: (Monad m, HasFileInfo e) => (String -> Bool) -> Predicate m e
+filenameS_ :: Monad m => (String -> Bool) -> Predicate m FileEntry
 filenameS_ f = withPath (return . f . encodeString . filename)
 
-filepath_ :: (Monad m, HasFileInfo e) => (FilePath -> Bool) -> Predicate m e
+filepath_ :: Monad m => (FilePath -> Bool) -> Predicate m FileEntry
 filepath_ f = withPath (return . f)
 
-filepathS_ :: (Monad m, HasFileInfo e) => (String -> Bool) -> Predicate m e
+filepathS_ :: Monad m => (String -> Bool) -> Predicate m FileEntry
 filepathS_ f = withPath (return . f . encodeString)
 
-depth :: (Monad m, HasFileInfo e) => (Int -> Bool) -> Predicate m e
-depth f = if_ (f . infoDepth . getFileInfo)
+depth :: Monad m => (Int -> Bool) -> Predicate m FileEntry
+depth f = if_ (f . entryDepth)
 
 withStatusTime :: Monad m
                => (UTCTime -> Bool) -> (FileStatus -> POSIXTime)
@@ -346,17 +310,60 @@ lastModified = flip withStatusTime modificationTimeHiRes
 -- 'followSymlinks' is @False@ it only prevents directory symlinks from being
 -- read.
 sourceFileEntries :: MonadResource m
-                  => FileInfo
-                  -> Looped m FileInfo FileEntry
+                  => Bool
+                  -> FileEntry
+                  -> Predicate m FileEntry
                   -> Producer m FileEntry
-sourceFileEntries (FileInfo p d) m = sourceDirectory p =$= awaitForever f
+sourceFileEntries follow (FileEntry p d _) m =
+    sourceDirectory p =$= awaitForever f
   where
-    f fp = applyLooped m (FileInfo fp d) yield $
-        sourceFileEntries (FileInfo fp (succ d))
+    f fp = let e = newFileEntry fp (succ d)
+           in transApplyCondT m e (const (yield e)) $ \next -> do
+               -- If no status has been determined yet, we must now in order
+               -- to know whether to traverse or not.
+               recurse <- isDirectory <$> case entryStatus e of
+                   Nothing -> liftIO
+                       $ (if follow
+                          then getFileStatus
+                          else getSymbolicLinkStatus)
+                       $ encodeString
+                       $ entryPath e
+                   Just st -> return st
+               when recurse $ sourceFileEntries follow e next
+
+-- | A raw find does no processing on the FileEntry, leaving it up to the user
+--   to determine when and if stat should be called.  Note that unless you
+--   take care to indicate when recursion should happen, an error will result
+--   when the raw finder attempts to recurse on a non-directory.  The bare
+--   minimum for a proper finder should look like this for non-recursion:
+--
+-- @
+-- findRaw \<path\> $ do
+--     \<apply predicates needing only pathname or depth\>
+--     localM stat $ do
+--         directory ||: norecurse
+--         \<apply predicates needing stat info\>
+-- @
+--
+-- To apply predicates only to a single directory, without recursing, simply
+-- start (or end) the predicate with 'norecurse', and use @localM stat@ or
+-- @localM lstat@ at the point where you need 'FileStatus' information.
+findRaw :: (MonadIO m, MonadResource m)
+        => FilePath -> Bool -> Predicate m FileEntry -> Producer m FileEntry
+findRaw path follow = sourceFileEntries follow (newFileEntry path 0)
+
+basicFind :: (MonadIO m, MonadResource m)
+          => Predicate m FileEntry
+          -> Bool
+          -> FilePath
+          -> Predicate m FileEntry
+          -> Producer m FileEntry
+basicFind f follow path pr = findRaw path follow $
+    f >> (directory ||: norecurse) >> pr
 
 find' :: (MonadIO m, MonadResource m)
       => FilePath -> Predicate m FileEntry -> Producer m FileEntry
-find' path pr = sourceFileEntries (FileInfo path 1) (stat >>> pr)
+find' = basicFind stat True
 
 find :: (MonadIO m, MonadResource m)
      => FilePath -> Predicate m FileEntry -> Producer m FilePath
@@ -364,72 +371,13 @@ find path pr = find' path pr =$= mapC entryPath
 
 lfind' :: (MonadIO m, MonadResource m)
        => FilePath -> Predicate m FileEntry -> Producer m FileEntry
-lfind' path pr = sourceFileEntries (FileInfo path 1) (lstat >>> pr)
+lfind' = basicFind lstat False
 
 lfind :: (MonadIO m, MonadResource m)
       => FilePath -> Predicate m FileEntry -> Producer m FilePath
 lfind path pr = lfind' path pr =$= mapC entryPath
 
-readPaths :: (MonadIO m, MonadResource m)
-          => FilePath -> Predicate m FilePath -> Producer m FilePath
-readPaths path pr = sourceDirectory path =$= awaitForever f
-  where
-    f fp = do
-        r <- lift $ runLooped pr fp
-        case r of
-            Ignore -> return ()
-            Keep a -> yield a
-            RecurseOnly _ -> return ()
-            KeepAndRecurse a _ -> yield a
-
-data FindFilter = IgnoreFile
-                | ConsiderFile
-                | MaybeRecurse
-    deriving (Show, Eq)
-
--- | Run a find, but using a pre-pass filter on the FilePaths, to eliminates
---   files from consideration early and avoid calling stat on them.
-doFindPreFilter :: (MonadIO m, MonadResource m)
-                => FileInfo
-                -> Bool
-                -> Predicate m FileInfo
-                -> Predicate m FileEntry
-                -> Producer m FileEntry
-doFindPreFilter (FileInfo path dp) follow filt pr =
-    sourceDirectory path =$= awaitForever (worker (succ dp) pr)
-  where
-    worker d m fp = do
-        let info = FileInfo fp d
-        r <- lift $ runLooped filt info
-        let candidate = case r of
-                Ignore -> IgnoreFile
-                Keep _ -> ConsiderFile
-                RecurseOnly _ -> MaybeRecurse
-                KeepAndRecurse _ _ -> ConsiderFile
-        unless (candidate == IgnoreFile) $ do
-            st <- liftIO $
-                (if follow
-                 then getFileStatus
-                 else getSymbolicLinkStatus) (encodeString fp)
-            let next = when (isDirectory st) . doFindPreFilter info follow filt
-            case candidate of
-                IgnoreFile   -> return ()
-                MaybeRecurse -> next pr
-                ConsiderFile ->
-                    applyLooped m (FileEntry (FileInfo fp d) st) yield next
-
-findWithPreFilter :: (MonadIO m, MonadResource m)
-                  => FilePath
-                  -> Bool
-                  -> Predicate m FileInfo
-                  -> Predicate m FileEntry
-                  -> Producer m FileEntry
-findWithPreFilter path = doFindPreFilter (FileInfo path 1)
-
 -- | Test a file path using the same type of 'Predicate' that is accepted by
 --   'find'.
 test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
-test matcher path =
-    getAny `liftM` testSingle (stat >>> matcher) (FileInfo path 0) alwaysTrue
-  where
-    alwaysTrue = const (return (Any True))
+test matcher path = Cond.test (stat >> matcher) (newFileEntry path 0)

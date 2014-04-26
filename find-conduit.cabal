@@ -28,15 +28,17 @@ Library
       , unix                 >= 2.5.1.1
       , text                 >= 0.11.3.1
       , regex-posix
-      , profunctors
       , mtl
       , semigroups
       , exceptions
       , time
+      , transformers
+      , transformers-base
+      , monad-control
     exposed-modules:
         Data.Conduit.Find
     other-modules:
-        Data.Conduit.Find.Looped
+        Data.Cond
 
 test-suite test
     hs-source-dirs: test
@@ -58,4 +60,7 @@ test-suite test
       , time
       , semigroups
       , exceptions
+      , transformers
+      , transformers-base
+      , monad-control
       , hspec                >= 1.4

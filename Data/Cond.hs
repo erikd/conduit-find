@@ -234,6 +234,13 @@ reject = mzero
 rejectAll :: Monad m => CondT a m b
 rejectAll = CondT $ return Ignore
 
+-- | 'norecurse' indicates that recursion should not be performed on the current
+--   item.  Note that this library doesn't perform any actual recursion; that
+--   is up to the consumer of the final 'Result' value, typically
+--   'applyCondT'.
+norecurse :: Monad m => CondT a m ()
+norecurse = CondT $ return (Keep ())
+
 or_ :: Monad m => NonEmpty (CondT a m b) -> CondT a m b
 or_ = foldr1 mplus
 
@@ -269,13 +276,11 @@ prune (CondT f) = CondT $ go `liftM` f
     go (RecurseOnly _)      = accept ()
     go (KeepAndRecurse _ _) = Ignore
 
--- | 'norecurse' indicates that recursion should not be performed on the current
---   item.  Note that this library doesn't perform any actual recursion; that
---   is up to the consumer of the final 'Result' value, typically
---   'applyCondT'.
-norecurse :: Monad m => CondT a m ()
-norecurse = CondT $ return (Keep ())
-
+-- | This function expresses the pattern of recursive traversal, directed by a
+--   'CondT' predicate.  It does not require that the structure being traversed
+--   in memory, as it might very well be a filesystem, the decision tree of an
+--   algorithm, etc.  It works very nicely with conduits, in order to iterate
+--   over the traversal in constant space.
 traverseRecursively :: (Monad m, Monad n)
                     => a
                     -> CondT a m b

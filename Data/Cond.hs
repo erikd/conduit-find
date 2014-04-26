@@ -11,7 +11,7 @@ module Data.Cond
     , guard_, guardM_, guardAll_, guardAllM_, apply, test
     , reject, rejectAll, prune, pruneWhen_
     , or_, (||:), and_, (&&:), not_
-    , if_, when_
+    , if_, when_, recurse
     , Iterator(..), recCondFoldMap
     ) where
 
@@ -80,15 +80,15 @@ instance Monoid b => Monoid (Result a m b) where
     mempty        = KeepAndRecurse mempty Nothing
     x `mappend` y = x <> y
 
-recurse :: Result a m b
-recurse = RecurseOnly Nothing
+recurse' :: Result a m b
+recurse' = RecurseOnly Nothing
 
-accept :: b -> Result a m b
-accept = flip KeepAndRecurse Nothing
+accept' :: b -> Result a m b
+accept' = flip KeepAndRecurse Nothing
 
 toResult :: Monad m => Maybe a -> forall r. Result r m a
-toResult Nothing  = recurse
-toResult (Just a) = accept a
+toResult Nothing  = recurse'
+toResult (Just a) = accept' a
 
 fromResult :: Monad m => forall r. Result r m a -> Maybe a
 fromResult Ignore               = Nothing
@@ -145,7 +145,7 @@ instance Monad m => Applicative (CondT a m) where
     (<*>) = ap
 
 instance Monad m => Monad (CondT a m) where
-    return = CondT . return . accept
+    return = CondT . return . accept'
     fail _ = mzero
     CondT f >>= k = CondT $ do
         r <- f
@@ -161,17 +161,17 @@ instance Monad m => Monad (CondT a m) where
             KeepAndRecurse b _ -> getCondT (k b)
 
 instance Monad m => MonadReader a (CondT a m) where
-    ask               = CondT $ liftM accept get
+    ask               = CondT $ liftM accept' get
     local f (CondT m) = CondT $ withStateT f m
     reader f          = f <$> ask
 
 instance Monad m => MonadState a (CondT a m) where
-    get     = CondT $ accept `liftM` get
-    put s   = CondT $ accept `liftM` put s
-    state f = CondT $ state (fmap (first accept) f)
+    get     = CondT $ accept' `liftM` get
+    put s   = CondT $ accept' `liftM` put s
+    state f = CondT $ state (fmap (first accept') f)
 
 instance Monad m => MonadPlus (CondT a m) where
-    mzero = CondT $ return recurse
+    mzero = CondT $ return recurse'
     CondT f `mplus` CondT g = CondT $ do
         r <- f
         case r of
@@ -191,19 +191,19 @@ instance MonadCatch m => MonadCatch (CondT a m) where
       where q u = CondT . u . getCondT
 
 instance MonadBase b m => MonadBase b (CondT a m) where
-    liftBase m = CondT $ accept `liftM` liftBase m
+    liftBase m = CondT $ accept' `liftM` liftBase m
 
 instance MonadIO m => MonadIO (CondT a m) where
-    liftIO m = CondT $ accept `liftM` liftIO m
+    liftIO m = CondT $ accept' `liftM` liftIO m
 
 instance MonadTrans (CondT a) where
-    lift m = CondT $ accept `liftM` lift m
+    lift m = CondT $ accept' `liftM` lift m
 
 instance MonadBaseControl b m => MonadBaseControl b (CondT r m) where
     newtype StM (CondT r m) a =
         CondTStM { unCondTStM :: StM m (Result r m a, r) }
     liftBaseWith f = CondT $ StateT $ \s ->
-        liftM (\x -> (accept x, s)) $ liftBaseWith $ \runInBase -> f $ \k ->
+        liftM (\x -> (accept' x, s)) $ liftBaseWith $ \runInBase -> f $ \k ->
             liftM CondTStM $ runInBase $ runStateT (getCondT k) s
     restoreM = CondT . StateT . const . restoreM . unCondTStM
     {-# INLINE liftBaseWith #-}
@@ -266,6 +266,28 @@ rejectAll = prune >> reject
 --   not reject the entry itself.
 prune :: Monad m => CondT a m ()
 prune = CondT $ return $ Keep ()
+
+-- | 'recurse' changes the recursion predicate for any child elements.  For
+--   example, the following file-finding predicate looks for all @*.hs@ files,
+--   but under any @.git@ directory it only looks for a file named @config@.
+--
+-- @
+-- if_ (name_ \".git\" \>\> directory)
+--     (recurse (name_ \"config\"))
+--     (glob \"*.hs\")
+-- @
+--
+-- If this code had used @recurse (glob \"*.hs\"))@ instead in the else case,
+-- it would have meant that @.git@ is only looked for at the top-level of the
+-- search (i.e., the top-most element).
+recurse :: Monad m => CondT a m b -> CondT a m b
+recurse c = CondT $ do
+    r <- getCondT c
+    return $ case r of
+        Ignore             -> Ignore
+        Keep b             -> Keep b
+        RecurseOnly _      -> RecurseOnly (Just c)
+        KeepAndRecurse b _ -> KeepAndRecurse b (Just c)
 
 or_ :: Monad m => NonEmpty (CondT a m b) -> CondT a m b
 or_ = foldr1 mplus

@@ -326,12 +326,13 @@ findRaw startPath follow predicate =
     iter x@(FileEntry path d mstat) this =
         this x (const (yield x)) $ Iterator $ \next -> do
             -- If no status has been determined yet, we must do so now in
-            -- order to know whether to traverse or not.
+            -- order to know whether to recurse or not.
             st <- case mstat of
-                Nothing -> liftIO $ (if follow
-                                     then getFileStatus
-                                     else getSymbolicLinkStatus)
-                                  $ encodeString path
+                Nothing -> liftIO
+                    $ (if follow
+                       then getFileStatus
+                       else getSymbolicLinkStatus)
+                    $ encodeString path
                 Just st -> return st
 
             when (isDirectory st) $

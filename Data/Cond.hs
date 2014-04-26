@@ -10,8 +10,8 @@ module Data.Cond
     , CondT(..), runCondT, Cond, runCond
     , guard_, guardM_, guardAll_, guardAllM_, apply, test
     , ignore, ignoreAll, prune, pruneWhen_
-    , or_, (||:), and_, (&&:), not_
-    , if_, when_, recurse
+    , or_, and_, not_, if_, when_
+    , recurse
     , Iterator(..), recCondFoldMap
     ) where
 
@@ -171,13 +171,17 @@ instance Monad m => MonadState a (CondT a m) where
     state f = CondT $ state (fmap (first accept') f)
 
 instance Monad m => MonadPlus (CondT a m) where
-    mzero = CondT $ return recurse'
+    mzero = ignore
     CondT f `mplus` CondT g = CondT $ do
         r <- f
         case r of
             x@(Keep _) -> return x
             x@(KeepAndRecurse _ _) -> return x
             _ -> g
+
+instance Monad m => Alternative (CondT a m) where
+    empty = mzero
+    (<|>) = mplus
 
 instance MonadThrow m => MonadThrow (CondT a m) where
   throwM = CondT . throwM
@@ -289,25 +293,18 @@ recurse c = CondT $ do
         RecurseOnly _      -> RecurseOnly (Just c)
         KeepAndRecurse b _ -> KeepAndRecurse b (Just c)
 
-or_ :: Monad m => NonEmpty (CondT a m b) -> CondT a m b
-or_ = foldr1 mplus
+or_ :: Monad m => NonEmpty (CondT a m b) -> CondT a m ()
+or_ = void . foldr1 (<|>)
 
-infixr 3 &&:
-(||:) :: Monad m => CondT a m b -> CondT a m b -> CondT a m b
-(||:) = mplus
-
-and_ :: Monad m => [CondT a m b] -> CondT a m [b]
-and_ = foldl' (\acc x -> (:) <$> x <*> acc) (return [])
-
-infixr 2 ||:
-(&&:) :: (Monad m, Semigroup b) => CondT a m b -> CondT a m b -> CondT a m b
-(&&:) = liftM2 (<>)
+and_ :: Monad m => [CondT a m b] -> CondT a m ()
+and_ = void . foldr1 (>>)
 
 -- | 'not_' inverts the meaning of the given predicate while preserving
 --   recursion.
 not_ :: Monad m => CondT a m b -> CondT a m ()
 not_ c = when_ c ignore
 
+-- jww (2014-04-26): I don't like the name of this function.
 pruneWhen_ :: Monad m => CondT a m b -> CondT a m ()
 pruneWhen_ c = when_ c ignoreAll
 

@@ -26,7 +26,8 @@ module Data.Conduit.Find
     , test
     , findRaw
 
-    -- * File path predicates
+
+      -- * File path predicates
     , ignoreVcs
     , regex
     , glob
@@ -347,7 +348,7 @@ basicFind :: (MonadIO m, MonadResource m)
           -> Predicate m FileEntry
           -> Source m FileEntry
 basicFind f follow path pr = findRaw path follow $
-    f >> (directory ||: prune) >> pr
+    f >> (directory <|> prune) >> pr
 
 find' :: (MonadIO m, MonadResource m)
       => FilePath -> Predicate m FileEntry

@@ -324,19 +324,21 @@ findRaw path follow predicate =
         predicate
         (const . yield)
         lift
-        $ \(FileEntry p d mst) go -> do
-            -- If no status has been determined yet, we must now in order to
-            -- know whether to traverse or not.
-            recurse <- isDirectory <$> case mst of
-                Nothing -> liftIO $ (if follow
-                                     then getFileStatus
-                                     else getSymbolicLinkStatus)
-                                  $ encodeString p
-                Just st -> return st
-            when recurse $
-                (sourceDirectory p =$) $ awaitForever $ \fp ->
-                    mapInput (const ()) (const Nothing) $
-                        go $ newFileEntry fp (succ d)
+        readDirectory
+  where
+    readDirectory (FileEntry p d mst) go = do
+        -- If no status has been determined yet, we must now in order to know
+        -- whether to traverse or not.
+        recurse <- isDirectory <$> case mst of
+            Nothing -> liftIO $ (if follow
+                                 then getFileStatus
+                                 else getSymbolicLinkStatus)
+                              $ encodeString p
+            Just st -> return st
+        when recurse $
+            (sourceDirectory p =$) $ awaitForever $ \fp ->
+                mapInput (const ()) (const Nothing) $
+                    go $ newFileEntry fp (succ d)
 
 basicFind :: (MonadIO m, MonadResource m)
           => Predicate m FileEntry

@@ -9,7 +9,7 @@ module Data.Cond
     ( Result(..), toResult, fromResult
     , CondT(..), runCondT, Cond, runCond
     , guard_, guardM_, guardAll_, guardAllM_, apply, test
-    , reject, rejectAll, prune, pruneWhen_
+    , ignore, ignoreAll, prune, pruneWhen_
     , or_, (||:), and_, (&&:), not_
     , if_, when_, recurse
     , Iterator(..), recCondFoldMap
@@ -228,7 +228,7 @@ guard_ :: Monad m => (a -> Bool) -> CondT a m ()
 guard_ f = ask >>= guard . f
 
 guardAll_ :: Monad m => (a -> Bool) -> CondT a m ()
-guardAll_ f = ask >>= (`unless` rejectAll)  . f
+guardAll_ f = ask >>= (`unless` ignoreAll)  . f
 
 if_ :: Monad m => CondT a m b -> CondT a m c -> CondT a m c -> CondT a m c
 if_ c x y = CondT $ do
@@ -246,7 +246,7 @@ guardM_ :: Monad m => (a -> m Bool) -> CondT a m ()
 guardM_ f = ask >>= lift . f >>= guard
 
 guardAllM_ :: Monad m => (a -> m Bool) -> CondT a m ()
-guardAllM_ f = ask >>= lift . f >>= \x -> unless x rejectAll
+guardAllM_ f = ask >>= lift . f >>= \x -> unless x ignoreAll
 
 apply :: Monad m => (a -> m (Maybe b)) -> CondT a m b
 apply f = CondT $ liftM toResult . lift . f =<< get
@@ -254,22 +254,22 @@ apply f = CondT $ liftM toResult . lift . f =<< get
 test :: Monad m => CondT a m b -> a -> m Bool
 test = (liftM isJust .) . runCondT
 
--- | 'reject' rejects the current entry, but allows recursion into its
+-- | 'ignore' ignores the current entry, but allows recursion into its
 --   descendents.  This is the same as 'mzero'.
-reject :: Monad m => CondT a m b
-reject = mzero
+ignore :: Monad m => CondT a m b
+ignore = mzero
 
-rejectAll :: Monad m => CondT a m b
-rejectAll = prune >> reject
+ignoreAll :: Monad m => CondT a m b
+ignoreAll = prune >> ignore
 
 -- | 'prune' prevents recursion into the current entry's descendent, but does
---   not reject the entry itself.
+--   not ignore the entry itself.
 prune :: Monad m => CondT a m ()
 prune = CondT $ return $ Keep ()
 
 -- | 'recurse' changes the recursion predicate for any child elements.  For
 --   example, the following file-finding predicate looks for all @*.hs@ files,
---   but under any @.git@ directory it only looks for a file named @config@.
+--   but under any @.git@ directory, only looks for a file named @config@:
 --
 -- @
 -- if_ (name_ \".git\" \>\> directory)
@@ -306,10 +306,10 @@ infixr 2 ||:
 -- | 'not_' inverts the meaning of the given predicate while preserving
 --   recursion.
 not_ :: Monad m => CondT a m b -> CondT a m ()
-not_ c = when_ c reject
+not_ c = when_ c ignore
 
 pruneWhen_ :: Monad m => CondT a m b -> CondT a m ()
-pruneWhen_ c = when_ c rejectAll
+pruneWhen_ c = when_ c ignoreAll
 
 newtype Iterator a m b = Iterator
     { runIterator :: (a -> (b -> m b) -> Iterator a m b -> m b) -> m b }

@@ -292,14 +292,12 @@ pruneWhen_ c = when_ c rejectAll
 newtype Iterator a m b = Iterator
     { runIterator :: (a -> (b -> m b) -> Iterator a m b -> m b) -> m b }
 
-recCondFoldMap :: (MonadIO m, Monoid b, Show a, Show b)
+recCondFoldMap :: (Monad m, Monoid b)
                => CondT a m b
                -> Iterator a m b
                -> m b
 recCondFoldMap cond iter = runIterator iter $ \x f next -> do
-    liftIO $ putStrLn $ "recCondFoldMap Cond.hs:300.." ++ show x
     r <- evalStateT (getCondT cond) x
-    liftIO $ putStrLn $ "recCondFoldMap Cond.hs:302.." ++ show r
     case r of
         Ignore -> return mempty
         Keep c -> f c

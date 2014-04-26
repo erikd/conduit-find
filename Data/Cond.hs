@@ -11,7 +11,7 @@ module Data.Cond
     , if_, ifM_, apply, test
     , reject, rejectAll, norecurse
     , or_, (||:), and_, (&&:), not_, prune
-    , applyCondT, transApplyCondT
+    , traverseRecursively
     ) where
 
 import Control.Applicative
@@ -24,20 +24,20 @@ import Control.Monad.State.Class
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.State (StateT(..), withStateT, evalStateT)
-import Data.Functor.Identity
 import Data.Foldable
+import Data.Functor.Identity
 import Data.List.NonEmpty
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Monoid hiding ((<>))
 import Data.Semigroup
 import Prelude hiding (foldr1)
 
--- | 'Result' is an enriched 'Maybe' type which can additionally specify
---   whether recursion is desired upon the given input, and how such recursion
---   should be performed.  It is isomorphic to:
+-- | 'Result' is an enriched 'Maybe' type which additionally specifies whether
+--   recursion should occur from the given input, and if so, how such
+--   recursion should be done.  It is isomorphic to:
 --
 -- @
--- type Result a m b = (Maybe b, Maybe (CondT a m b))
+-- type Result a m b = (Maybe b, Maybe (Maybe (CondT a m b)))
 -- @
 data Result a m b = Ignore
                   | Keep b
@@ -56,7 +56,7 @@ instance Monad m => Functor (Result a m) where
     fmap f (RecurseOnly l)      = RecurseOnly (liftM (fmap f) l)
     fmap f (KeepAndRecurse a l) = KeepAndRecurse (f a) (liftM (fmap f) l)
 
-instance Semigroup (Result a m a) where
+instance Semigroup (Result a m b) where
     Ignore        <> _                  = Ignore
     _             <> Ignore             = Ignore
     RecurseOnly _ <> Keep _             = Ignore
@@ -68,8 +68,8 @@ instance Semigroup (Result a m a) where
     Keep _        <> KeepAndRecurse b _ = Keep b
     _             <> KeepAndRecurse b m = KeepAndRecurse b m
 
-instance Monoid (Result a m a) where
-    mempty        = Ignore
+instance Monoid b => Monoid (Result a m b) where
+    mempty        = KeepAndRecurse mempty Nothing
     x `mappend` y = x <> y
 
 recurse :: Result a m b
@@ -89,38 +89,35 @@ fromResult (RecurseOnly _)      = Nothing
 fromResult (KeepAndRecurse a _) = Just a
 
 -- | 'CondT" is an arrow that maps from 'a' to @m b@, but only if 'a'
---   satisfies a certain condition.  It is a Monad, so 'CondT' arrows may be
---   sequenced with '>>', which means that each condition must be satisfied
---   for the map to succeed, in the spirit of the 'Maybe' short-circuiting
---   Monad.  In fact, 'CondT' is nearly equivalent to @Reader a (MaybeT m) b@,
---   except that a pair of Maybes is returned, with only the first member of
---   the pair causing a short-circuit (see the 'Result' type above).
+--   satisfies certain conditions.  It is a Monad, meaning each condition
+--   stated must be satisfied for the map to succeed (in the spirit of the
+--   'Maybe' short-circuiting Monad).  In fact, 'CondT' is nearly equivalent
+--   to @StateT a (MaybeT m) b@, with some additional complexity for
+--   performing recursive iterations (see the 'Result' type above).
 --
---   Regular functions can 'lift' into 'CondT', or you can promote functions
---   of type @a -> m (Maybe b)@ using 'apply'.  Pure functions of type @a ->
---   Bool@ are lifted with 'if_', and @a -> m Bool@ with 'ifM_'.  In effect,
---   @if_ f@ is the same as @ask >>= guard . f@.
+--   You can promote functions of type @a -> m (Maybe b)@ into 'CondT' using
+--   'apply'.  Pure functions @a -> Bool@ are lifted with 'if_', and
+--   @a -> m Bool@ with 'ifM_'.  In effect, @if_ f@ is the same as
+--   @ask >>= guard . f@.
 --
---   By fixing the input type, @CondT a m@ forms a Functor, Applicative,
---   Monad, and MonadPlus, with the behavior of "early-termination" in the
---   same spirit as 'Maybe'.  Within this Monad, each "statement" is a
---   predicate applied to the same input, returning the final result only if
---   every predicate succeeds.  For example:
+--   Here is a trivial example:
 --
 -- @
 --   flip runCondT 42 $ do
---     x <- if_ even
---     liftIO $ putStrLn "x must be True to reach here"
+--     if_ even
+--     liftIO $ putStrLn "42 must be even to reach here"
 --
 --     if_ odd <|> if_ even
 --     if_ even &&: if_ (== 42)
 --     if_ ((== 0) . (`mod` 6))
 -- @
 --
---   'CondT' is typically invoked using 'runCondT', in which case it maps from
---   'a' to 'Maybe b'.  It can also be run as 'getCondT', in which case it
---   returns the more informative 'Result' type, specifying how recursion
---   should be performed from the given 'a' value.
+--   'CondT' is typically invoked using 'runCondT', in which case it maps 'a'
+--   to 'Maybe b'.  It can also be run with 'applyCondT', which does case
+--   analysis on the final 'Result' type, specifying how recursion should be
+--   performed from the given 'a' value.  This is useful when applying
+--   Conduits to structural traversals, and was the motivation behind this
+--   type.
 newtype CondT a m b = CondT { getCondT :: StateT a m (Result a m b) }
 
 type Cond a = CondT a Identity
@@ -279,40 +276,20 @@ prune (CondT f) = CondT $ go `liftM` f
 norecurse :: Monad m => CondT a m ()
 norecurse = CondT $ return (Keep ())
 
--- | 'applyCondT' runs a 'CondT', as does 'getCondT', but also provides case
---   analysis on the subsequent 'Result' type.
-applyCondT :: Monad m
-           => CondT a m b          -- ^ Conditional to execute.
-           -> a                    -- ^ Value under consideration.
-           -> (b -> m ())           -- ^ Function to call if it matches.
-           -> (CondT a m b -> m ()) -- ^ Function to call to recurse on the
-                                  --   input value.
-           -> m ()
-applyCondT c a f g = do
-    r <- evalStateT (getCondT c) a
+traverseRecursively :: (Monad m, Monad n)
+                    => a
+                    -> CondT a m b
+                    -> (a -> b -> n ())
+                    -> (forall x. m x -> n x)
+                    -> (a -> (a -> n ()) -> n ())
+                    -> n ()
+traverseRecursively a c f trans getChildren = do
+    r <- trans $ evalStateT (getCondT c) a
     case r of
-        Ignore                    -> return ()
-        Keep b                    -> f b
-        RecurseOnly Nothing       -> g c
-        RecurseOnly (Just m)      -> g m
-        KeepAndRecurse b Nothing  -> f b >> g c
-        KeepAndRecurse b (Just m) -> f b >> g m
-
--- | 'applyCondT' is intended for use within a parent transformer, such as
---   'ConduitM'.  It provides case analysis for the 'Result' type.
-transApplyCondT :: (MonadTrans t, (Monad (t m)), Monad m)
-                => CondT a m b            -- ^ Conditional to execute.
-                -> a                      -- ^ Value under consideration.
-                -> (b -> t m ())           -- ^ Function to call if it matches.
-                -> (CondT a m b -> t m ()) -- ^ Function to call to recurse on
-                                         -- the input value.
-                -> t m ()
-transApplyCondT c a f g = do
-    r <- lift $ evalStateT (getCondT c) a
-    case r of
-        Ignore                    -> return ()
-        Keep b                    -> f b
-        RecurseOnly Nothing       -> g c
-        RecurseOnly (Just m)      -> g m
-        KeepAndRecurse b Nothing  -> f b >> g c
-        KeepAndRecurse b (Just m) -> f b >> g m
+        Ignore             -> return ()
+        Keep b             -> f a b
+        RecurseOnly m      -> descend (fromMaybe c m)
+        KeepAndRecurse b m -> f a b >> descend (fromMaybe c m)
+  where
+    descend next = getChildren a $ \child ->
+        traverseRecursively child next f trans getChildren

@@ -1,5 +1,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE GADTs #-}
 
 module Data.Conduit.Find
     (
@@ -298,39 +299,6 @@ lastAccessed = flip withStatusTime accessTimeHiRes
 lastModified :: Monad m => (UTCTime -> Bool) -> Predicate m FileEntry
 lastModified = flip withStatusTime modificationTimeHiRes
 
--- Walk through the entries of a directory tree, allowing the user to specify
--- a 'Predicate' which may decides not only which entries to yield from the
--- conduit, but also which directories to follow, and how to recurse into that
--- directory by permitting the use of a subsequent 'Predicate'.
---
--- Note that the 'followSymlinks' parameter to this function has a different
--- meaning than it does for 'sourceDirectoryDeep': if @True@, symlinks are
--- never passed to the predicate, only what they point to; if @False@,
--- symlinks are never read at all.  For 'sourceDirectoryDeep', if
--- 'followSymlinks' is @False@ it only prevents directory symlinks from being
--- read.
-sourceFileEntries :: MonadResource m
-                  => Bool
-                  -> FileEntry
-                  -> Predicate m FileEntry
-                  -> Producer m FileEntry
-sourceFileEntries follow (FileEntry p d _) m =
-    sourceDirectory p =$= awaitForever f
-  where
-    f fp = let e = newFileEntry fp (succ d)
-           in transApplyCondT m e (const (yield e)) $ \next -> do
-               -- If no status has been determined yet, we must now in order
-               -- to know whether to traverse or not.
-               recurse <- isDirectory <$> case entryStatus e of
-                   Nothing -> liftIO
-                       $ (if follow
-                          then getFileStatus
-                          else getSymbolicLinkStatus)
-                       $ encodeString
-                       $ entryPath e
-                   Just st -> return st
-               when recurse $ sourceFileEntries follow e next
-
 -- | A raw find does no processing on the FileEntry, leaving it up to the user
 --   to determine when and if stat should be called.  Note that unless you
 --   take care to indicate when recursion should happen, an error will result
@@ -349,32 +317,54 @@ sourceFileEntries follow (FileEntry p d _) m =
 -- start (or end) the predicate with 'norecurse', and use @localM stat@ or
 -- @localM lstat@ at the point where you need 'FileStatus' information.
 findRaw :: (MonadIO m, MonadResource m)
-        => FilePath -> Bool -> Predicate m FileEntry -> Producer m FileEntry
-findRaw path follow = sourceFileEntries follow (newFileEntry path 0)
+        => FilePath -> Bool -> Predicate m FileEntry -> Source m FileEntry
+findRaw path follow predicate =
+    traverseRecursively
+        (newFileEntry path 0)
+        predicate
+        (const . yield)
+        lift
+        $ \(FileEntry p d mst) go -> do
+            -- If no status has been determined yet, we must now in order to
+            -- know whether to traverse or not.
+            recurse <- isDirectory <$> case mst of
+                Nothing -> liftIO $ (if follow
+                                     then getFileStatus
+                                     else getSymbolicLinkStatus)
+                                  $ encodeString p
+                Just st -> return st
+            when recurse $
+                (sourceDirectory p =$) $ awaitForever $ \fp ->
+                    mapInput (const ()) (const Nothing) $
+                        go $ newFileEntry fp (succ d)
 
 basicFind :: (MonadIO m, MonadResource m)
           => Predicate m FileEntry
           -> Bool
           -> FilePath
           -> Predicate m FileEntry
-          -> Producer m FileEntry
+          -> Source m FileEntry
 basicFind f follow path pr = findRaw path follow $
     f >> (directory ||: norecurse) >> pr
 
 find' :: (MonadIO m, MonadResource m)
-      => FilePath -> Predicate m FileEntry -> Producer m FileEntry
+      => FilePath -> Predicate m FileEntry
+      -> Source m FileEntry
 find' = basicFind stat True
 
 find :: (MonadIO m, MonadResource m)
-     => FilePath -> Predicate m FileEntry -> Producer m FilePath
+     => FilePath -> Predicate m FileEntry
+     -> Source m FilePath
 find path pr = find' path pr =$= mapC entryPath
 
 lfind' :: (MonadIO m, MonadResource m)
-       => FilePath -> Predicate m FileEntry -> Producer m FileEntry
+       => FilePath -> Predicate m FileEntry
+       -> Source m FileEntry
 lfind' = basicFind lstat False
 
 lfind :: (MonadIO m, MonadResource m)
-      => FilePath -> Predicate m FileEntry -> Producer m FilePath
+      => FilePath -> Predicate m FileEntry
+      -> Source m FilePath
 lfind path pr = lfind' path pr =$= mapC entryPath
 
 -- | Test a file path using the same type of 'Predicate' that is accepted by

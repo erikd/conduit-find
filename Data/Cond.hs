@@ -6,12 +6,11 @@
 {-# LANGUAGE TypeFamilies #-}
 
 module Data.Cond
-    ( CondT(..), runCondT, applyCondT, Cond, runCond, applyCond
-    , guard_, guardM_, apply, test
+    ( CondT(..), Cond
+    , runCondT, applyCondT, runCond, applyCond
+    , guard_, guardM_, apply, test, matches
     , if_, when_, unless_, or_, and_, not_
-    , ignore, prune, reject
-    , recurse
-    -- , Iterator(..), recCondFoldMap
+    , ignore, prune, reject, recurse
     ) where
 
 import Control.Applicative
@@ -290,6 +289,10 @@ guardM_ f = ask >>= lift . f >>= guard
 test :: Monad m => CondT a m b -> a -> m Bool
 test = (liftM isJust .) . runCondT
 {-# INLINE test #-}
+
+matches :: Monad m => CondT a m b -> CondT a m Bool
+matches = fmap isJust . optional
+{-# INLINE matches #-}
 
 apply :: Monad m => (a -> m (Maybe b)) -> CondT a m b
 apply f = CondT $ get >>= liftM toResult . lift . f

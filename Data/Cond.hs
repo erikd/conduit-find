@@ -14,7 +14,6 @@ module Data.Cond
     -- , Iterator(..), recCondFoldMap
     ) where
 
-import Debug.Trace
 import Control.Applicative
 import Control.Arrow (first)
 import Control.Monad hiding (mapM_, sequence_)
@@ -252,16 +251,13 @@ runCond = (runIdentity .) . runCondT
 --   this function, meaning you should use 'WriterT' if you wish to do so
 --   (unlike the pure variant, 'applyCond', which must accumulate a value to
 --   have any meaning).
-applyCondT :: (Monad m, Show a, Show b)
+applyCondT :: Monad m
            => a
            -> CondT a m b
            -> (a -> Maybe b -> Maybe (CondT a m b) -> m ())
            -> m ()
 applyCondT a c k = do
-    trace (" a: " ++ show a) $ return ()
     (r, a') <- runStateT (getCondT c) a
-    trace (" r: " ++ show r) $ return ()
-    trace ("a': " ++ show a') $ return ()
     case r of
         Ignore              -> k a' Nothing  Nothing
         Keep b              -> k a' (Just b) Nothing

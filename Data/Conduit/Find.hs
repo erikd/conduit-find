@@ -324,7 +324,7 @@ lastModified = flip withStatusTime modificationTimeHiRes
 -- To apply predicates only to a single directory, without recursing, simply
 -- start (or end) the predicate with 'norecurse', and use @localM stat@ or
 -- @localM lstat@ at the point where you need 'FileStatus' information.
-findRaw :: (MonadIO m, MonadResource m, Show b)
+findRaw :: (MonadIO m, MonadResource m)
         => FilePath -> Bool -> CondT FileEntry m b -> Source m (FileEntry, b)
 findRaw startPath follow = go (newFileEntry startPath 0) . hoist lift
   where

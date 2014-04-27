@@ -1,6 +1,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE TupleSections #-}
 
 module Data.Conduit.Find
     (
@@ -17,10 +17,10 @@ module Data.Conduit.Find
     -- $notes
 
     -- * Finding functions
-      find
-    , find'
-    , lfind
-    , lfind'
+      findFiles
+    , findFiles'
+    , lfindFiles
+    , lfindFiles'
     , stat
     , lstat
     , test
@@ -31,6 +31,7 @@ module Data.Conduit.Find
     , ignoreVcs
     , regex
     , glob
+    , name_
     , filename_
     , filenameS_
     , filepath_
@@ -39,6 +40,7 @@ module Data.Conduit.Find
 
     -- * File entry predicates (uses stat information)
     , regular
+    , directory
     , hasMode
     , executable
     , depth
@@ -56,13 +58,14 @@ module Data.Conduit.Find
 
 import           Conduit
 import           Control.Applicative
-import           Control.Monad
+import           Control.Monad hiding (forM_)
 import           Control.Monad.Morph
 import           Control.Monad.State.Class
 import           Data.Attoparsec.Text
 import           Data.Bits
 import qualified Data.Cond as Cond
 import           Data.Cond hiding (test)
+import           Data.Foldable hiding (elem)
 import           Data.Maybe (fromMaybe)
 import           Data.Monoid
 import           Data.Text (Text, unpack, pack)
@@ -189,12 +192,15 @@ newFileEntry p d = FileEntry p d Nothing
 -- | Return all entries, except for those within version-control metadata
 --   directories (and not including the version control directory itself either).
 ignoreVcs :: Monad m => Predicate m FileEntry
-ignoreVcs = pruneWhen_ (filename_ (`elem` vcsDirs))
+ignoreVcs = when_ (filename_ (`elem` vcsDirs)) reject
   where
     vcsDirs = [ ".git", "CVS", "RCS", "SCCS", ".svn", ".hg", "_darcs" ]
 
 regex :: Monad m => Text -> Predicate m FileEntry
 regex pat = filename_ (=~ pat)
+
+name_ :: Monad m => FilePath -> Predicate m FileEntry
+name_ = filename_ . (==)
 
 -- | This is a re-export of 'Text.Regex.Posix.=~', with the types changed for
 --   ease of use with this module.  For example, you can simply say:
@@ -318,28 +324,32 @@ lastModified = flip withStatusTime modificationTimeHiRes
 -- To apply predicates only to a single directory, without recursing, simply
 -- start (or end) the predicate with 'norecurse', and use @localM stat@ or
 -- @localM lstat@ at the point where you need 'FileStatus' information.
-findRaw :: (MonadIO m, MonadResource m)
-        => FilePath -> Bool -> Predicate m FileEntry -> Source m FileEntry
-findRaw startPath follow predicate =
-    recCondFoldMap (hoist lift predicate) $
-        Iterator (iter (newFileEntry startPath 0))
+findRaw :: (MonadIO m, MonadResource m, Show b)
+        => FilePath -> Bool -> CondT FileEntry m b -> Source m (FileEntry, b)
+findRaw startPath follow = go (newFileEntry startPath 0) . hoist lift
   where
-    iter x@(FileEntry path d mstat) this =
-        this x (const (yield x)) $ Iterator $ \next -> do
-            -- If no status has been determined yet, we must do so now in
-            -- order to know whether to recurse or not.
-            st <- case mstat of
-                Nothing -> liftIO
-                    $ (if follow
-                       then getFileStatus
-                       else getSymbolicLinkStatus)
-                    $ encodeString path
-                Just st -> return st
+    statFile = liftIO
+             . (if follow
+                then getFileStatus
+                else getSymbolicLinkStatus)
+             . encodeString
+
+    go x pr = applyCondT x pr $ \a@(FileEntry path d mstat) mb mcond -> do
+        -- If the item matched, also yield the predicate's result value.
+        forM_ mb $ yield . (a,)
+
+        -- If the conditional matched, we are requested to recurse if this
+        -- is a directory
+        forM_ mcond $ \cond -> do
+
+            -- If no status has been determined, we must do so now in order
+            -- to know whether to actually recurse or not.
+            st <- maybe (statFile path) return mstat
 
             when (isDirectory st) $
                 (sourceDirectory path =$) $ awaitForever $ \fp ->
                     mapInput (const ()) (const Nothing) $
-                        iter (newFileEntry fp (succ d)) next
+                        go (newFileEntry fp (succ d)) cond
 
 basicFind :: (MonadIO m, MonadResource m)
           => Predicate m FileEntry
@@ -347,30 +357,29 @@ basicFind :: (MonadIO m, MonadResource m)
           -> FilePath
           -> Predicate m FileEntry
           -> Source m FileEntry
-basicFind f follow path pr = findRaw path follow $
-    f >> (directory <|> prune) >> pr
+basicFind f follow path pr = findRaw path follow (f >> pr) =$= mapC fst
 
-find' :: (MonadIO m, MonadResource m)
+findFiles' :: (MonadIO m, MonadResource m)
       => FilePath -> Predicate m FileEntry
       -> Source m FileEntry
-find' = basicFind stat True
+findFiles' = basicFind stat True
 
-find :: (MonadIO m, MonadResource m)
+findFiles :: (MonadIO m, MonadResource m)
      => FilePath -> Predicate m FileEntry
      -> Source m FilePath
-find path pr = find' path pr =$= mapC entryPath
+findFiles path pr = findFiles' path pr =$= mapC entryPath
 
-lfind' :: (MonadIO m, MonadResource m)
+lfindFiles' :: (MonadIO m, MonadResource m)
        => FilePath -> Predicate m FileEntry
        -> Source m FileEntry
-lfind' = basicFind lstat False
+lfindFiles' = basicFind lstat False
 
-lfind :: (MonadIO m, MonadResource m)
+lfindFiles :: (MonadIO m, MonadResource m)
       => FilePath -> Predicate m FileEntry
       -> Source m FilePath
-lfind path pr = lfind' path pr =$= mapC entryPath
+lfindFiles path pr = lfindFiles' path pr =$= mapC entryPath
 
 -- | Test a file path using the same type of 'Predicate' that is accepted by
---   'find'.
+--   'findFiles'.
 test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
 test matcher path = Cond.test (stat >> matcher) (newFileEntry path 0)

@@ -23,9 +23,9 @@ main = hspec $ do
 
         it "finds files" $ do
             xs <- runResourceT $
-                find "."
+                findFiles "."
                     (    ignoreVcs
-                     >> pruneWhen_ (filename_ (== "dist"))
+                     >> when_ (name_ "dist") reject
                      >> glob "*.hs"
                      >> not_ (glob "Setup*")
                      >> regular
@@ -40,13 +40,13 @@ main = hspec $ do
 
         it "finds files with a different ordering" $ do
             xs <- runResourceT $
-                find "."
+                findFiles "."
                     (    ignoreVcs
                      >> glob "*.hs"
                      >> not_ (glob "Setup*")
-                     -- This pruneWhen_ only applies to .hs files now, so it won't
-                     -- match anything, thus having no effect but burning CPU!
-                     >> pruneWhen_ (filename_ (== "dist"))
+                     -- This applies only to .hs files now, so it won't match
+                     -- anything, thus having no effect but burning CPU!
+                     >> when_ (name_ "dist") reject
                      >> regular
                      >> not_ executable
                     )
@@ -61,13 +61,13 @@ main = hspec $ do
             xs <- runResourceT $
                 findRaw "." True
                     (do ignoreVcs
-                        pruneWhen_ (filename_ (== "dist"))
+                        when_ (name_ "dist") reject
                         glob "*.hs"
                         not_ (glob "Setup*")
                         stat
                         regular
                         not_ executable)
-                    =$ mapC entryPath $$ sinkList
+                    =$ mapC (entryPath . fst) $$ sinkList
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
             "./dist/setup-config" `elem` xs `shouldBe` False
@@ -78,14 +78,14 @@ main = hspec $ do
             xs <- runResourceT $
                 findRaw "." True
                     (do ignoreVcs
-                        pruneWhen_ (depth (>=1))
-                        pruneWhen_ (filename_ (== "dist"))
+                        when_ (depth (>=1)) reject
+                        when_ (name_ "dist") reject
                         glob "*.hs"
                         not_ (glob "Setup*")
                         stat
                         regular
                         not_ executable)
-                    =$ mapC entryPath $$ sinkList
+                    =$ mapC (entryPath . fst) $$ sinkList
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` False
             "./dist/setup-config" `elem` xs `shouldBe` False

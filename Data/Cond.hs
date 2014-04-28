@@ -182,7 +182,7 @@ instance Monad m => MonadState a (CondT a m) where
     {-# INLINE state #-}
 
 instance Monad m => Alternative (CondT a m) where
-    empty = CondT $ return Ignore
+    empty = CondT $ return recurse'
     {-# INLINE empty #-}
     CondT f <|> CondT g = CondT $ do
         r <- f
@@ -193,7 +193,7 @@ instance Monad m => Alternative (CondT a m) where
     {-# INLINE (<|>) #-}
 
 instance Monad m => MonadPlus (CondT a m) where
-    mzero = CondT $ return recurse'
+    mzero = empty
     {-# INLINE mzero #-}
     mplus = (<|>)
     {-# INLINE mplus #-}
@@ -348,7 +348,7 @@ prune = CondT $ return $ Keep ()
 -- | 'reject' is a synonym for both ignoring and pruning an entry. It is the
 --   same as 'prune >> ignore'.
 reject :: Monad m => CondT a m ()
-reject = empty
+reject = CondT $ return Ignore
 {-# INLINE reject #-}
 
 -- | 'recurse' changes the recursion predicate for any child elements.  For

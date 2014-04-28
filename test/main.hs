@@ -25,7 +25,7 @@ main = hspec $ do
             xs <- runResourceT $
                 find "."
                     (do ignoreVcs
-                        when_ (name_ "dist") reject
+                        when_ (name_ "dist") prune
                         glob "*.hs"
                         not_ (glob "Setup*")
                         regular
@@ -46,7 +46,7 @@ main = hspec $ do
                         -- This applies only to .hs files now, so it won't
                         -- match anything, thus having no effect but burning
                         -- CPU!
-                        when_ (name_ "dist") reject
+                        when_ (name_ "dist") prune
                         regular
                         not_ executable)
                     $$ sinkList
@@ -60,7 +60,7 @@ main = hspec $ do
             xs <- runResourceT $
                 find "."
                     (do ignoreVcs
-                        when_ (name_ "dist") reject
+                        when_ (name_ "dist") prune
                         glob "*.hs"
                         not_ (glob "Setup*")
                         regular
@@ -76,8 +76,8 @@ main = hspec $ do
             xs <- runResourceT $
                 find "."
                     (do ignoreVcs
-                        when_ (depth_ (>=1)) reject
-                        when_ (name_ "dist") reject
+                        maxdepth_ 1
+                        when_ (name_ "dist") prune
                         glob "*.hs"
                         not_ (glob "Setup*")
                         regular

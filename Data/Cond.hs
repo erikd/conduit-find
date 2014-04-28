@@ -10,7 +10,7 @@ module Data.Cond
     , runCondT, applyCondT, runCond, applyCond
     , guardM, guard_, guardM_, apply, consider
     , matches, if_, when_, unless_, or_, and_, not_
-    , ignore, prune, reject
+    , ignore, norecurse, prune
     , test, recurse
     ) where
 
@@ -351,17 +351,17 @@ ignore :: Monad m => CondT a m b
 ignore = mzero
 {-# INLINE ignore #-}
 
--- | 'prune' prevents recursion into the current entry's descendents, but does
---   not ignore the entry itself.
+-- | 'prune' is a synonym for both ignoring an entry and its descendents. It
+--   is the same as 'ignore >> norecurse'.
 prune :: Monad m => CondT a m ()
-prune = CondT $ return $ Keep ()
+prune = CondT $ return Ignore
 {-# INLINE prune #-}
 
--- | 'reject' is a synonym for both ignoring and pruning an entry. It is the
---   same as 'prune >> ignore'.
-reject :: Monad m => CondT a m ()
-reject = CondT $ return Ignore
-{-# INLINE reject #-}
+-- | 'norecurse' prevents recursion into the current entry's descendents, but
+--   does not ignore the entry itself.
+norecurse :: Monad m => CondT a m ()
+norecurse = CondT $ return $ Keep ()
+{-# INLINE norecurse #-}
 
 test :: Monad m => CondT a m b -> a -> m Bool
 test = (liftM isJust .) . runCondT

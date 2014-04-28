@@ -8,9 +8,10 @@
 module Data.Cond
     ( CondT(..), Cond
     , runCondT, applyCondT, runCond, applyCond
-    , guard_, guardM_, apply, test, matches
-    , if_, when_, unless_, or_, and_, not_
-    , ignore, prune, reject, recurse
+    , guardM, guard_, guardM_, apply, consider
+    , matches, if_, when_, unless_, or_, and_, not_
+    , ignore, prune, reject
+    , test, recurse
     ) where
 
 import Control.Applicative
@@ -31,9 +32,9 @@ import Data.Monoid hiding ((<>))
 import Data.Semigroup
 import Prelude hiding (mapM_, foldr1, sequence_)
 
--- | 'Result' is an enriched 'Maybe' type which additionally specifies whether
+-- | 'Result' is an enriched 'Maybe' type which also specifies whether
 --   recursion should occur from the given input, and if so, how such
---   recursion should be done.
+--   recursion should be performed.
 data Result a m b = Ignore
                   | Keep b
                   | RecurseOnly (Maybe (CondT a m b))
@@ -93,17 +94,19 @@ fromResult (Keep a)             = Just a
 fromResult (RecurseOnly _)      = Nothing
 fromResult (KeepAndRecurse a _) = Just a
 
--- | 'CondT" is an arrow that maps from 'a' to @m b@, but only if 'a'
---   satisfies certain conditions.  It is a Monad, meaning each condition
---   stated must be satisfied for the map to succeed (in the spirit of the
---   'Maybe' short-circuiting Monad).  In fact, 'CondT' is nearly equivalent
---   to @StateT a (MaybeT m) b@, with some additional complexity for
---   performing recursive iterations (see the 'Result' type above).
+-- | 'CondT' is an enhanced form @StateT a (MaybeT m) b@, which uses the
+--   'Result' type instead of 'Maybe' to additional express whether recursion
+--   should be performed on the current state.  This is used to form
+--   predicates to guide recursive unfolds.
 --
---   You can promote functions of type @a -> m (Maybe b)@ into 'CondT' using
---   'apply'.  Pure functions @a -> Bool@ are lifted with 'guard_', and
---   @a -> m Bool@ with 'ifM_'.  In effect, @guard_ f@ is the same as
---   @ask >>= guard . f@.
+--   Several different types may be promoted to 'CondT':
+--
+--   [@Bool@]                  guard
+--   [@m Bool@]                guardM
+--   [@a -> Bool@]              guard_
+--   [@a -> m Bool@]            guardM_
+--   [@a -> m (Maybe b)@]       apply
+--   [@a -> m (Maybe (b, a))@]  consider
 --
 --   Here is a trivial example:
 --
@@ -278,6 +281,10 @@ applyCond a c k = case runIdentity (runStateT (getCondT c) a) of
     (RecurseOnly c', a')      -> k a' Nothing  (Just (fromMaybe c c'))
     (KeepAndRecurse b c', a') -> k a' (Just b) (Just (fromMaybe c c'))
 
+guardM :: Monad m => m Bool -> CondT a m ()
+guardM m = lift m >>= guard
+{-# INLINE guardM #-}
+
 guard_ :: Monad m => (a -> Bool) -> CondT a m ()
 guard_ f = ask >>= guard . f
 {-# INLINE guard_ #-}
@@ -286,17 +293,22 @@ guardM_ :: Monad m => (a -> m Bool) -> CondT a m ()
 guardM_ f = ask >>= lift . f >>= guard
 {-# INLINE guardM_ #-}
 
-test :: Monad m => CondT a m b -> a -> m Bool
-test = (liftM isJust .) . runCondT
-{-# INLINE test #-}
+apply :: Monad m => (a -> m (Maybe b)) -> CondT a m b
+apply f = CondT $ get >>= liftM toResult . lift . f
+{-# INLINE apply #-}
+
+consider :: Monad m => (a -> m (Maybe (b, a))) -> CondT a m b
+consider f = CondT $ do
+    a <- get
+    mres <- lift $ f a
+    case mres of
+        Nothing      -> return Ignore
+        Just (b, a') -> put a' >> return (accept' b)
+{-# INLINE consider #-}
 
 matches :: Monad m => CondT a m b -> CondT a m Bool
 matches = fmap isJust . optional
 {-# INLINE matches #-}
-
-apply :: Monad m => (a -> m (Maybe b)) -> CondT a m b
-apply f = CondT $ get >>= liftM toResult . lift . f
-{-# INLINE apply #-}
 
 if_ :: Monad m => CondT a m b -> CondT a m c -> CondT a m c -> CondT a m c
 if_ c x y = CondT $ do
@@ -350,6 +362,10 @@ prune = CondT $ return $ Keep ()
 reject :: Monad m => CondT a m ()
 reject = CondT $ return Ignore
 {-# INLINE reject #-}
+
+test :: Monad m => CondT a m b -> a -> m Bool
+test = (liftM isJust .) . runCondT
+{-# INLINE test #-}
 
 -- | 'recurse' changes the recursion predicate for any child elements.  For
 --   example, the following file-finding predicate looks for all @*.hs@ files,

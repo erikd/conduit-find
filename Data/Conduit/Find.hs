@@ -18,35 +18,32 @@ module Data.Conduit.Find
 
     -- * Finding functions
       findFiles
-    , findFiles'
-    , lfindFiles
-    , lfindFiles'
+    , findFilePaths
+    , test
+    , ltest
     , stat
     , lstat
-    , test
-    , findRaw
-
+    , hasStatus
 
       -- * File path predicates
-    , ignoreVcs
-    , regex
     , glob
+    , regex
+    , depth_
     , name_
     , filename_
     , filenameS_
-    , filepath_
-    , filepathS_
-    , withPath
+    , pathname_
+    , pathnameS_
+    , getFilePath
+    , ignoreVcs
 
     -- * File entry predicates (uses stat information)
     , regular
     , directory
     , hasMode
     , executable
-    , depth
     , lastAccessed
     , lastModified
-    , withFileStatus
 
     -- * Predicate combinators
     , module Cond
@@ -172,38 +169,98 @@ to the full file information after the stat.
 See 'Data.Cond' for more details on the Monad used to build predicates.
 -}
 
-type Predicate m a = CondT a m ()
-
 data FileEntry = FileEntry
-    { entryPath   :: FilePath
-    , entryDepth  :: Int
-    , entryStatus :: Maybe FileStatus
+    { entryPath        :: !FilePath
+    , entryDepth       :: !Int
+    , entryFollowLinks :: !Bool
+    , entryStatus      :: !(Maybe FileStatus)
       -- ^ This is Nothing until we determine stat should be called.
     }
+
+newFileEntry :: FilePath -> Int -> Bool -> FileEntry
+newFileEntry p d f = FileEntry p d f Nothing
 
 instance Show FileEntry where
     show entry = "FileEntry "
               ++ show (entryPath entry)
               ++ " " ++ show (entryDepth entry)
 
-newFileEntry :: FilePath -> Int -> FileEntry
-newFileEntry p d = FileEntry p d Nothing
+getFilePath :: Monad m => CondT FileEntry m FilePath
+getFilePath = entryPath <$> get
 
--- | Return all entries, except for those within version-control metadata
---   directories (and not including the version control directory itself either).
-ignoreVcs :: Monad m => Predicate m FileEntry
-ignoreVcs = when_ (filename_ (`elem` vcsDirs)) reject
-  where
-    vcsDirs = [ ".git", "CVS", "RCS", "SCCS", ".svn", ".hg", "_darcs" ]
+pathname_ :: Monad m => (FilePath -> Bool) -> CondT FileEntry m ()
+pathname_ f = guard . f =<< getFilePath
 
-regex :: Monad m => Text -> Predicate m FileEntry
-regex pat = filename_ (=~ pat)
+pathnameS_ :: Monad m => (String -> Bool) -> CondT FileEntry m ()
+pathnameS_ f = pathname_ (f . encodeString)
 
-name_ :: Monad m => FilePath -> Predicate m FileEntry
+filename_ :: Monad m => (FilePath -> Bool) -> CondT FileEntry m ()
+filename_ f = pathname_ (f . filename)
+
+filenameS_ :: Monad m => (String -> Bool) -> CondT FileEntry m ()
+filenameS_ f = pathname_ (f . encodeString . filename)
+
+name_ :: Monad m => FilePath -> CondT FileEntry m ()
 name_ = filename_ . (==)
 
+depth_ :: Monad m => (Int -> Bool) -> CondT FileEntry m ()
+depth_ f = guard_ (f . entryDepth)
+
+-- | Get the current status for the file.  If the status being requested is
+--   already cached in the entry information, simply return it from there.
+getStat :: MonadIO m => Maybe Bool -> FileEntry -> m (FileStatus, FileEntry)
+getStat mfollow entry = case entryStatus entry of
+    Just s
+        | maybe True (== entryFollowLinks entry) mfollow ->
+            return (s, entry)
+        | otherwise -> doStat >>= \s' -> return (s', entry)
+    Nothing -> do
+        s <- doStat
+        return (s, entry { entryStatus = Just s })
+  where
+    doStat =  liftIO $ (if fromMaybe (entryFollowLinks entry) mfollow
+                        then getFileStatus
+                        else getSymbolicLinkStatus)
+                     $ encodeString (entryPath entry)
+
+applyStat :: MonadIO m => Maybe Bool -> CondT FileEntry m FileStatus
+applyStat mfollow =
+    get >>= \e -> lift (getStat mfollow e) >>= \(s, e') -> s <$ put e'
+
+lstat :: MonadIO m => CondT FileEntry m FileStatus
+lstat = applyStat (Just False)
+
+stat :: MonadIO m => CondT FileEntry m FileStatus
+stat = applyStat (Just True)
+
+hasStatus :: MonadIO m => (FileStatus -> Bool) -> CondT FileEntry m ()
+hasStatus f = guard . f =<< applyStat Nothing
+
+regular :: MonadIO m => CondT FileEntry m ()
+regular = hasStatus isRegularFile
+
+directory :: MonadIO m => CondT FileEntry m ()
+directory = hasStatus isDirectory
+
+hasMode :: MonadIO m => FileMode -> CondT FileEntry m ()
+hasMode m = hasStatus (\s -> fileMode s .&. m /= 0)
+
+executable :: MonadIO m => CondT FileEntry m ()
+executable = hasMode ownerExecuteMode
+
+withStatusTime :: MonadIO m
+               => (UTCTime -> Bool) -> (FileStatus -> POSIXTime)
+               -> CondT FileEntry m ()
+withStatusTime f g = hasStatus (f . posixSecondsToUTCTime . g)
+
+lastAccessed :: MonadIO m => (UTCTime -> Bool) -> CondT FileEntry m ()
+lastAccessed = flip withStatusTime accessTimeHiRes
+
+lastModified :: MonadIO m => (UTCTime -> Bool) -> CondT FileEntry m ()
+lastModified = flip withStatusTime modificationTimeHiRes
+
 -- | This is a re-export of 'Text.Regex.Posix.=~', with the types changed for
---   ease of use with this module.  For example, you can simply say:
+--   use with this module.  For example, you can simply say:
 --
 -- @
 --    filename_ (=~ \"\\\\.hs$\")
@@ -217,9 +274,19 @@ name_ = filename_ . (==)
 (=~) :: FilePath -> Text -> Bool
 str =~ pat = encodeString str R.=~ unpack pat
 
+regex :: Monad m => Text -> CondT FileEntry m ()
+regex pat = filename_ (=~ pat)
+
+-- | Return all entries, except for those within version-control metadata
+--   directories (and not including the version control directory itself either).
+ignoreVcs :: Monad m => CondT FileEntry m ()
+ignoreVcs = when_ (filename_ (`elem` vcsDirs)) reject
+  where
+    vcsDirs = [ ".git", "CVS", "RCS", "SCCS", ".svn", ".hg", "_darcs" ]
+
 -- | Find every entry whose filename part matching the given filename globbing
 --   expression.  For example: @glob "*.hs"@.
-glob :: Monad m => Text -> Predicate m FileEntry
+glob :: Monad m => Text -> CondT FileEntry m ()
 glob g = case parseOnly globParser g of
     Left e  -> error $ "Failed to parse glob: " ++ e
     Right x -> regex ("^" <> x <> "$")
@@ -239,147 +306,44 @@ glob g = case parseOnly globParser g of
                             then ['\\', x]
                             else [x]
 
-doStat :: MonadIO m => (String -> IO FileStatus) -> Predicate m FileEntry
-doStat getstatus = do
-    entry <- get
-    s <- liftIO $ getstatus (encodeString (entryPath entry))
-    put $ entry { entryStatus = Just s }
-
-lstat :: MonadIO m => Predicate m FileEntry
-lstat = doStat getSymbolicLinkStatus
-
-stat :: MonadIO m => Predicate m FileEntry
-stat = doStat getFileStatus
-
-getStatus :: FileEntry -> FileStatus
-getStatus e = fromMaybe
-    (error $ "FileStatus has not been determined for: " ++ show (entryPath e))
-    (entryStatus e)
-
-withFileStatus :: Monad m
-               => (FileStatus -> m Bool)
-               -> Predicate m FileEntry
-withFileStatus f = guardM_ (f . getStatus)
-
-status :: Monad m => (FileStatus -> Bool) -> Predicate m FileEntry
-status f = withFileStatus (return . f)
-
-regular :: Monad m => Predicate m FileEntry
-regular = status isRegularFile
-
-directory :: Monad m => Predicate m FileEntry
-directory = status isDirectory
-
-hasMode :: Monad m => FileMode -> Predicate m FileEntry
-hasMode m = status (\s -> fileMode s .&. m /= 0)
-
-executable :: Monad m => Predicate m FileEntry
-executable = hasMode ownerExecuteMode
-
-withPath :: Monad m
-         => (FilePath -> m Bool)
-         -> Predicate m FileEntry
-withPath f = guardM_ (f . entryPath)
-
-filename_ :: Monad m => (FilePath -> Bool) -> Predicate m FileEntry
-filename_ f = withPath (return . f . filename)
-
-filenameS_ :: Monad m => (String -> Bool) -> Predicate m FileEntry
-filenameS_ f = withPath (return . f . encodeString . filename)
-
-filepath_ :: Monad m => (FilePath -> Bool) -> Predicate m FileEntry
-filepath_ f = withPath (return . f)
-
-filepathS_ :: Monad m => (String -> Bool) -> Predicate m FileEntry
-filepathS_ f = withPath (return . f . encodeString)
-
-depth :: Monad m => (Int -> Bool) -> Predicate m FileEntry
-depth f = guard_ (f . entryDepth)
-
-withStatusTime :: Monad m
-               => (UTCTime -> Bool) -> (FileStatus -> POSIXTime)
-               -> Predicate m FileEntry
-withStatusTime f g = status (f . posixSecondsToUTCTime . g)
-
-lastAccessed :: Monad m => (UTCTime -> Bool) -> Predicate m FileEntry
-lastAccessed = flip withStatusTime accessTimeHiRes
-
-lastModified :: Monad m => (UTCTime -> Bool) -> Predicate m FileEntry
-lastModified = flip withStatusTime modificationTimeHiRes
-
--- | A raw find does no processing on the FileEntry, leaving it up to the user
---   to determine when and if stat should be called.  Note that unless you
---   take care to indicate when recursion should happen, an error will result
---   when the raw finder attempts to recurse on a non-directory.  The bare
---   minimum for a proper finder should look like this for non-recursion:
---
--- @
--- findRaw \<path\> $ do
---     \<apply predicates needing only pathname or depth\>
---     localM stat $ do
---         directory ||: norecurse
---         \<apply predicates needing stat info\>
--- @
---
--- To apply predicates only to a single directory, without recursing, simply
--- start (or end) the predicate with 'norecurse', and use @localM stat@ or
--- @localM lstat@ at the point where you need 'FileStatus' information.
-findRaw :: (MonadIO m, MonadResource m)
-        => FilePath -> Bool -> CondT FileEntry m b -> Source m (FileEntry, b)
-findRaw startPath follow = go (newFileEntry startPath 0) . hoist lift
+-- | Find file entries in a directory tree, recursively, applying the given
+--   recursion predicate to the search.  This conduit yields pairs of type
+--   @(FileEntry, a)@, where is the return value from the predicate at each
+--   step.
+findFiles :: (MonadIO m, MonadResource m)
+          => FilePath -> Bool -> CondT FileEntry m a -> Source m (FileEntry, a)
+findFiles startPath follow =
+    go (newFileEntry startPath 0 follow) . hoist lift
   where
-    statFile = liftIO
-             . (if follow
-                then getFileStatus
-                else getSymbolicLinkStatus)
-             . encodeString
-
-    go x pr = applyCondT x pr $ \a@(FileEntry path d mstat) mb mcond -> do
+    go x pr = applyCondT x pr $ \e@(FileEntry path depth flw _) mb mcond -> do
         -- If the item matched, also yield the predicate's result value.
-        forM_ mb $ yield . (a,)
+        forM_ mb $ yield . (e,)
 
         -- If the conditional matched, we are requested to recurse if this
         -- is a directory
         forM_ mcond $ \cond -> do
-
             -- If no status has been determined, we must do so now in order
             -- to know whether to actually recurse or not.
-            st <- maybe (statFile path) return mstat
-
-            when (isDirectory st) $
+            descend <- isDirectory . fst <$> getStat Nothing e
+            when descend $
                 (sourceDirectory path =$) $ awaitForever $ \fp ->
                     mapInput (const ()) (const Nothing) $
-                        go (newFileEntry fp (succ d)) cond
+                        go (newFileEntry fp (succ depth) flw) cond
 
-basicFind :: (MonadIO m, MonadResource m)
-          => Predicate m FileEntry
-          -> Bool
-          -> FilePath
-          -> Predicate m FileEntry
-          -> Source m FileEntry
-basicFind f follow path pr = findRaw path follow (f >> pr) =$= mapC fst
+-- | A simpler version of 'findFiles', which yields only 'FilePath' values,
+--   and ignores any values returned by the predicate action.
+findFilePaths :: (MonadIO m, MonadResource m)
+              => FilePath -> Bool -> CondT FileEntry m a
+              -> Source m FilePath
+findFilePaths path follow pr =
+    findFiles path follow pr =$= mapC (entryPath . fst)
 
-findFiles' :: (MonadIO m, MonadResource m)
-      => FilePath -> Predicate m FileEntry
-      -> Source m FileEntry
-findFiles' = basicFind stat True
-
-findFiles :: (MonadIO m, MonadResource m)
-     => FilePath -> Predicate m FileEntry
-     -> Source m FilePath
-findFiles path pr = findFiles' path pr =$= mapC entryPath
-
-lfindFiles' :: (MonadIO m, MonadResource m)
-       => FilePath -> Predicate m FileEntry
-       -> Source m FileEntry
-lfindFiles' = basicFind lstat False
-
-lfindFiles :: (MonadIO m, MonadResource m)
-      => FilePath -> Predicate m FileEntry
-      -> Source m FilePath
-lfindFiles path pr = lfindFiles' path pr =$= mapC entryPath
-
--- | Test a file path using the same type of 'Predicate' that is accepted by
+-- | Test a file path using the same type of predicate that is accepted by
 --   'findFiles'.
-test :: MonadIO m => Predicate m FileEntry -> FilePath -> m Bool
-test matcher path = Cond.test (stat >> matcher) (newFileEntry path 0)
+test :: MonadIO m => CondT FileEntry m () -> FilePath -> m Bool
+test matcher path = Cond.test (stat >> matcher) (newFileEntry path 0 True)
+
+-- | Test a file path using the same type of predicate that is accepted by
+--   'findFiles', but do not follow symlinks.
+ltest :: MonadIO m => CondT FileEntry m () -> FilePath -> m Bool
+ltest matcher path = Cond.test (lstat >> matcher) (newFileEntry path 0 False)

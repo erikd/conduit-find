@@ -23,6 +23,8 @@ module Data.Conduit.Find
     , sourceFindFiles
     , findFiles
     , findFilePaths
+    , FindOptions(..)
+    , defaultFindOptions
     , test
     , ltest
     , stat

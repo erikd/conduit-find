@@ -17,7 +17,8 @@ module Data.Conduit.Find
     -- $notes
 
     -- * Finding functions
-      findFiles
+      find
+    , findFiles
     , findFilePaths
     , test
     , ltest
@@ -62,7 +63,7 @@ import           Data.Attoparsec.Text
 import           Data.Bits
 import qualified Data.Cond as Cond
 import           Data.Cond hiding (test)
-import           Data.Foldable hiding (elem)
+import           Data.Foldable hiding (elem, find)
 import           Data.Maybe (fromMaybe)
 import           Data.Monoid
 import           Data.Text (Text, unpack, pack)
@@ -169,15 +170,26 @@ to the full file information after the stat.
 See 'Data.Cond' for more details on the Monad used to build predicates.
 -}
 
+data FindOptions = FindOptions
+    { findFollowSymlinks :: Bool
+    , findContentsFirst  :: Bool
+    }
+
+defaultFindOptions :: FindOptions
+defaultFindOptions = FindOptions
+    { findFollowSymlinks = True
+    , findContentsFirst  = False
+    }
+
 data FileEntry = FileEntry
     { entryPath        :: !FilePath
     , entryDepth       :: !Int
-    , entryFollowLinks :: !Bool
+    , entryFindOptions :: !FindOptions
     , entryStatus      :: !(Maybe FileStatus)
       -- ^ This is Nothing until we determine stat should be called.
     }
 
-newFileEntry :: FilePath -> Int -> Bool -> FileEntry
+newFileEntry :: FilePath -> Int -> FindOptions -> FileEntry
 newFileEntry p d f = FileEntry p d f Nothing
 
 instance Show FileEntry where
@@ -211,17 +223,18 @@ depth_ f = guard_ (f . entryDepth)
 getStat :: MonadIO m => Maybe Bool -> FileEntry -> m (FileStatus, FileEntry)
 getStat mfollow entry = case entryStatus entry of
     Just s
-        | maybe True (== entryFollowLinks entry) mfollow ->
+        | maybe True (== follow entry) mfollow ->
             return (s, entry)
         | otherwise -> doStat >>= \s' -> return (s', entry)
     Nothing -> do
         s <- doStat
         return (s, entry { entryStatus = Just s })
   where
-    doStat =  liftIO $ (if fromMaybe (entryFollowLinks entry) mfollow
-                        then getFileStatus
-                        else getSymbolicLinkStatus)
-                     $ encodeString (entryPath entry)
+    follow = findFollowSymlinks . entryFindOptions
+    doStat = liftIO $ (if fromMaybe (follow entry) mfollow
+                       then getFileStatus
+                       else getSymbolicLinkStatus)
+                    $ encodeString (entryPath entry)
 
 applyStat :: MonadIO m => Maybe Bool -> CondT FileEntry m FileStatus
 applyStat mfollow =
@@ -311,11 +324,14 @@ glob g = case parseOnly globParser g of
 --   @(FileEntry, a)@, where is the return value from the predicate at each
 --   step.
 findFiles :: (MonadIO m, MonadResource m)
-          => FilePath -> Bool -> CondT FileEntry m a -> Source m (FileEntry, a)
-findFiles startPath follow =
-    go (newFileEntry startPath 0 follow) . hoist lift
+          => FindOptions
+          -> FilePath
+          -> CondT FileEntry m a
+          -> Source m (FileEntry, a)
+findFiles opts startPath =
+    go (newFileEntry startPath 0 opts) . hoist lift
   where
-    go x pr = applyCondT x pr $ \e@(FileEntry path depth flw _) mb mcond -> do
+    go x pr = applyCondT x pr $ \e@(FileEntry path depth opts' _) mb mcond -> do
         -- If the item matched, also yield the predicate's result value.
         forM_ mb $ yield . (e,)
 
@@ -328,22 +344,31 @@ findFiles startPath follow =
             when descend $
                 (sourceDirectory path =$) $ awaitForever $ \fp ->
                     mapInput (const ()) (const Nothing) $
-                        go (newFileEntry fp (succ depth) flw) cond
+                        go (newFileEntry fp (succ depth) opts') cond
 
 -- | A simpler version of 'findFiles', which yields only 'FilePath' values,
 --   and ignores any values returned by the predicate action.
 findFilePaths :: (MonadIO m, MonadResource m)
-              => FilePath -> Bool -> CondT FileEntry m a
+              => FindOptions
+              -> FilePath
+              -> CondT FileEntry m a
               -> Source m FilePath
-findFilePaths path follow pr =
-    findFiles path follow pr =$= mapC (entryPath . fst)
+findFilePaths opts path pr = findFiles opts path pr =$= mapC (entryPath . fst)
+
+-- | Calls 'findFilePaths' with the default set of finding options.
+--   Equivalent to @findFilePaths defaultFindOptions@.
+find :: (MonadIO m, MonadResource m)
+     => FilePath -> CondT FileEntry m a -> Source m FilePath
+find = findFilePaths defaultFindOptions
 
 -- | Test a file path using the same type of predicate that is accepted by
 --   'findFiles'.
 test :: MonadIO m => CondT FileEntry m () -> FilePath -> m Bool
-test matcher path = Cond.test (stat >> matcher) (newFileEntry path 0 True)
+test matcher path = Cond.test matcher (newFileEntry path 0 defaultFindOptions)
 
 -- | Test a file path using the same type of predicate that is accepted by
 --   'findFiles', but do not follow symlinks.
 ltest :: MonadIO m => CondT FileEntry m () -> FilePath -> m Bool
-ltest matcher path = Cond.test (lstat >> matcher) (newFileEntry path 0 False)
+ltest matcher path =
+    Cond.test (lstat >> matcher)
+        (newFileEntry path 0 defaultFindOptions { findFollowSymlinks = False })

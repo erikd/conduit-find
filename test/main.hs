@@ -23,14 +23,13 @@ main = hspec $ do
 
         it "finds files" $ do
             xs <- runResourceT $
-                findFilePaths "." True
-                    (    ignoreVcs
-                     >> when_ (name_ "dist") reject
-                     >> glob "*.hs"
-                     >> not_ (glob "Setup*")
-                     >> regular
-                     >> not_ executable
-                    )
+                find "."
+                    (do ignoreVcs
+                        when_ (name_ "dist") reject
+                        glob "*.hs"
+                        not_ (glob "Setup*")
+                        regular
+                        not_ executable)
                     $$ sinkList
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
@@ -40,16 +39,16 @@ main = hspec $ do
 
         it "finds files with a different ordering" $ do
             xs <- runResourceT $
-                findFilePaths "." True
-                    (    ignoreVcs
-                     >> glob "*.hs"
-                     >> not_ (glob "Setup*")
-                     -- This applies only to .hs files now, so it won't match
-                     -- anything, thus having no effect but burning CPU!
-                     >> when_ (name_ "dist") reject
-                     >> regular
-                     >> not_ executable
-                    )
+                find "."
+                    (do ignoreVcs
+                        glob "*.hs"
+                        not_ (glob "Setup*")
+                        -- This applies only to .hs files now, so it won't
+                        -- match anything, thus having no effect but burning
+                        -- CPU!
+                        when_ (name_ "dist") reject
+                        regular
+                        not_ executable)
                     $$ sinkList
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
@@ -59,14 +58,14 @@ main = hspec $ do
 
         it "finds files using a pre-pass filter" $ do
             xs <- runResourceT $
-                findFiles "." True
+                find "."
                     (do ignoreVcs
                         when_ (name_ "dist") reject
                         glob "*.hs"
                         not_ (glob "Setup*")
                         regular
                         not_ executable)
-                    =$ mapC (entryPath . fst) $$ sinkList
+                    $$ sinkList
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
             "./dist/setup-config" `elem` xs `shouldBe` False
@@ -75,7 +74,7 @@ main = hspec $ do
 
         it "properly applies post-pass pruning" $ do
             xs <- runResourceT $
-                findFiles "." True
+                find "."
                     (do ignoreVcs
                         when_ (depth_ (>=1)) reject
                         when_ (name_ "dist") reject
@@ -83,7 +82,7 @@ main = hspec $ do
                         not_ (glob "Setup*")
                         regular
                         not_ executable)
-                    =$ mapC (entryPath . fst) $$ sinkList
+                    $$ sinkList
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` False
             "./dist/setup-config" `elem` xs `shouldBe` False

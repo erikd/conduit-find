@@ -480,26 +480,26 @@ findFilesSource opts startPath predicate =
   where
     wrap = mapInput (const ()) (const Nothing)
 
-    go x pr = applyCondT x pr $ \e mb mcond -> do
-        let opts' = entryFindOptions e
-            this  = unless (findIgnoreResults opts') $
-                        yieldEntry e mb
-            next  = walkChildren e mcond
+    go x pr = do
+        ((mres, mcond), entry) <- applyCondT x pr
+        let opts' = entryFindOptions entry
+            this  = unless (findIgnoreResults opts') $ yieldEntry entry mres
+            next  = walkChildren entry mcond
         if findContentsFirst opts'
             then next >> this
             else this >> next
 
-    yieldEntry e mb =
+    yieldEntry entry mres =
         -- If the item matched, also yield the predicate's result value.
-        forM_ mb $ yield . (e,)
+        forM_ mres $ yield . (entry,)
 
-    walkChildren e@(FileEntry path depth opts' _) mcond =
+    walkChildren entry@(FileEntry path depth opts' _) mcond =
         -- If the conditional matched, we are requested to recurse if this
         -- is a directory
         forM_ mcond $ \cond -> do
             -- If no status has been determined, we must do so now in order
             -- to know whether to actually recurse or not.
-            descend <- fmap (isDirectory . fst) <$> getStat Nothing e
+            descend <- fmap (isDirectory . fst) <$> getStat Nothing entry
             when (descend == Just True) $
                 (sourceDirectory path =$) $ awaitForever $ \fp ->
                     wrap $ go (newFileEntry fp (succ depth) opts') cond
@@ -534,10 +534,11 @@ find = findFilePaths defaultFindOptions
 --   'findFiles'.
 test :: MonadIO m => CondT FileEntry m () -> FilePath -> m Bool
 test matcher path =
-    Cond.test matcher (newFileEntry path 0 defaultFindOptions)
+    Cond.test (newFileEntry path 0 defaultFindOptions) matcher
 
 -- | Test a file path using the same type of predicate that is accepted by
 --   'findFiles', but do not follow symlinks.
 ltest :: MonadIO m => CondT FileEntry m () -> FilePath -> m Bool
-ltest matcher path = Cond.test matcher
+ltest matcher path = Cond.test
     (newFileEntry path 0 defaultFindOptions { findFollowSymlinks = False })
+    matcher

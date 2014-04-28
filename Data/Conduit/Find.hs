@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
@@ -19,7 +20,7 @@ module Data.Conduit.Find
 
     -- * Finding functions
       find
-    , findFilesSource
+    , sourceFindFiles
     , findFiles
     , findFilePaths
     , test
@@ -35,6 +36,9 @@ module Data.Conduit.Find
 
       -- * GNU find compatibility predicates
     , depth_
+    , follow_
+    , noleaf_
+    , prune_
     , maxdepth_
     , mindepth_
     , ignoreReaddirRace_
@@ -52,8 +56,6 @@ module Data.Conduit.Find
     , pathname_
     , pathnameS_
     , getFilePath
-    , follow_
-    , prune_
 
     -- * File entry predicates (uses stat information)
     , regular
@@ -82,6 +84,9 @@ import           Data.Bits
 import qualified Data.Cond as Cond
 import           Data.Cond hiding (test)
 import           Data.Foldable hiding (elem, find)
+#if LEAFOPT
+import           Data.IORef
+#endif
 import           Data.Maybe (fromMaybe)
 import           Data.Monoid
 import           Data.Text (Text, unpack, pack)
@@ -193,6 +198,7 @@ data FindOptions = FindOptions
     , findContentsFirst     :: Bool
     , findIgnoreReaddirRace :: Bool
     , findIgnoreResults     :: Bool
+    , findLeafOptimization  :: Bool
     }
 
 defaultFindOptions :: FindOptions
@@ -201,6 +207,7 @@ defaultFindOptions = FindOptions
     , findContentsFirst     = False
     , findIgnoreReaddirRace = False
     , findIgnoreResults     = False
+    , findLeafOptimization  = True
     }
 
 data FileEntry = FileEntry
@@ -253,6 +260,12 @@ depth_ = modifyFindOptions $ \opts -> opts { findContentsFirst = True }
 follow_ :: Monad m => CondT FileEntry m ()
 follow_ = modifyFindOptions $ \opts -> opts { findFollowSymlinks = True }
 
+noleaf_ :: Monad m => CondT FileEntry m ()
+noleaf_ = modifyFindOptions $ \opts -> opts { findLeafOptimization = False }
+
+prune_ :: Monad m => CondT a m ()
+prune_ = prune
+
 ignoreReaddirRace_ :: Monad m => CondT FileEntry m ()
 ignoreReaddirRace_ =
     modifyFindOptions $ \opts -> opts { findIgnoreReaddirRace = True }
@@ -266,9 +279,6 @@ maxdepth_ l = getDepth >>= guard . (<= l)
 
 mindepth_ :: Monad m => Int -> CondT FileEntry m ()
 mindepth_ l = getDepth >>= guard . (>= l)
-
-prune_ :: Monad m => CondT a m ()
-prune_ = prune
 
 -- xdev_ = error "NYI"
 
@@ -470,21 +480,26 @@ glob g = case parseOnly globParser g of
 --   recursion predicate to the search.  This conduit yields pairs of type
 --   @(FileEntry, a)@, where is the return value from the predicate at each
 --   step.
-findFilesSource :: (MonadIO m, MonadResource m)
+sourceFindFiles :: (MonadIO m, MonadResource m)
                 => FindOptions
                 -> FilePath
                 -> CondT FileEntry m a
                 -> Producer m (FileEntry, a)
-findFilesSource opts startPath predicate =
-    wrap $ go (newFileEntry startPath 0 opts) $ hoist lift predicate
+sourceFindFiles opts startPath predicate = do
+#if LEAFOPT
+    startDc <- liftIO $ newIORef 1
+#else
+    let startDc = ()
+#endif
+    wrap $ go (newFileEntry startPath 0 opts) (hoist lift predicate) startDc
   where
     wrap = mapInput (const ()) (const Nothing)
 
-    go x pr = do
+    go x pr dc = do
         ((mres, mcond), entry) <- applyCondT x pr
         let opts' = entryFindOptions entry
             this  = unless (findIgnoreResults opts') $ yieldEntry entry mres
-            next  = walkChildren entry mcond
+            next  = walkChildren entry mcond dc
         if findContentsFirst opts'
             then next >> this
             else this >> next
@@ -493,16 +508,52 @@ findFilesSource opts startPath predicate =
         -- If the item matched, also yield the predicate's result value.
         forM_ mres $ yield . (entry,)
 
-    walkChildren entry@(FileEntry path depth opts' _) mcond =
-        -- If the conditional matched, we are requested to recurse if this
-        -- is a directory
+    walkChildren entry@(FileEntry path depth opts' _) mcond dc =
+        -- If the conditional matched, we are requested to recurse if this is
+        -- a directory
         forM_ mcond $ \cond -> do
-            -- If no status has been determined, we must do so now in order
-            -- to know whether to actually recurse or not.
-            descend <- fmap (isDirectory . fst) <$> getStat Nothing entry
-            when (descend == Just True) $
-                (sourceDirectory path =$) $ awaitForever $ \fp ->
-                    wrap $ go (newFileEntry fp (succ depth) opts') cond
+            -- Each directory on a normal Unix filesystem has at least 2 hard
+            -- links: its name and its `.'  entry.  Additionally, its
+            -- subdirectories (if any) each have a `..'  entry linked to that
+            -- directory.  When examining a directory, after stat'ing 2 fewer
+            -- subdirectories than the directory's link count, assume that the
+            -- rest of the entries in the directory are non-directories
+            -- (`leaf' files in the directory tree).  If only the files' names
+            -- need to be examined, there is no need to stat them; this gives
+            -- a significant increase in search speed.
+#if LEAFOPT
+            let leafOpt = findLeafOptimization opts'
+            doStat <- if leafOpt
+                      then (> 0) <$> liftIO (readIORef dc)
+                      else return True
+#else
+            let doStat = dc == () -- to quiet hlint warnings
+#endif
+            when doStat $ do
+                -- If no status has been determined, we must do so now in
+                -- order to know whether to actually recurse or not.
+                mst <- getStat Nothing entry
+                forM_ mst $ \(st, _) ->
+                    when (isDirectory st) $ do
+#if LEAFOPT
+                        -- Update directory count for the parent directory.
+                        liftIO $ modifyIORef dc pred
+                        -- Track the directory count for this child dir.
+                        let lc = linkCount st - 2
+                        dc' <- liftIO $ newIORef lc
+#else
+                        let dc' = ()
+#endif
+                        (sourceDirectory path =$) $ awaitForever $ \fp ->
+                            wrap $ go (newFileEntry fp (succ depth)
+                                       opts'
+#if LEAFOPT
+                                            { findLeafOptimization =
+                                                   leafOpt && lc >= 0
+                                            }
+#endif
+                                      )
+                                cond dc'
 
 findFiles :: (MonadIO m, MonadBaseControl IO m, MonadThrow m)
           => FindOptions
@@ -510,7 +561,7 @@ findFiles :: (MonadIO m, MonadBaseControl IO m, MonadThrow m)
           -> CondT FileEntry m a
           -> m ()
 findFiles opts path predicate =
-    runResourceT $ findFilesSource
+    runResourceT $ sourceFindFiles
         opts { findIgnoreResults = True } path (hoist lift predicate)
         $$ sinkNull
 
@@ -522,7 +573,7 @@ findFilePaths :: (MonadIO m, MonadResource m)
               -> CondT FileEntry m a
               -> Producer m FilePath
 findFilePaths opts path predicate =
-    findFilesSource opts path predicate =$= mapC (entryPath . fst)
+    sourceFindFiles opts path predicate =$= mapC (entryPath . fst)
 
 -- | Calls 'findFilePaths' with the default set of finding options.
 --   Equivalent to @findFilePaths defaultFindOptions@.

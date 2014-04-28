@@ -19,6 +19,8 @@ Source-repository head
 Library
     default-language:   Haskell98
     ghc-options: -Wall
+    if os(linux)
+        cpp-options: -DLEAFOPT=1
     build-depends:
         base                 >= 3 && < 5
       , conduit

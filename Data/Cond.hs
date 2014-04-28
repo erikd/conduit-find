@@ -169,7 +169,7 @@ instance Monad m => Monad (CondT a m) where
             KeepAndRecurse b _ -> getCondT (k b)
 
 instance Monad m => MonadReader a (CondT a m) where
-    ask               = CondT $ liftM accept' get
+    ask               = CondT $ gets accept'
     {-# INLINE ask #-}
     local f (CondT m) = CondT $ withStateT f m
     {-# INLINE local #-}
@@ -177,7 +177,7 @@ instance Monad m => MonadReader a (CondT a m) where
     {-# INLINE reader #-}
 
 instance Monad m => MonadState a (CondT a m) where
-    get     = CondT $ liftM accept' get
+    get     = CondT $ gets accept'
     {-# INLINE get #-}
     put s   = CondT $ liftM accept' $ put s
     {-# INLINE put #-}

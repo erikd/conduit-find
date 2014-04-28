@@ -19,8 +19,8 @@ module Data.Conduit.Find
 
     -- * Finding functions
       find
+    , findFilesSource
     , findFiles
-    , findFiles_
     , findFilePaths
     , test
     , ltest
@@ -192,6 +192,7 @@ data FindOptions = FindOptions
     { findFollowSymlinks    :: Bool
     , findContentsFirst     :: Bool
     , findIgnoreReaddirRace :: Bool
+    , findIgnoreResults     :: Bool
     }
 
 defaultFindOptions :: FindOptions
@@ -199,6 +200,7 @@ defaultFindOptions = FindOptions
     { findFollowSymlinks    = True
     , findContentsFirst     = False
     , findIgnoreReaddirRace = False
+    , findIgnoreResults     = False
     }
 
 data FileEntry = FileEntry
@@ -468,20 +470,24 @@ glob g = case parseOnly globParser g of
 --   recursion predicate to the search.  This conduit yields pairs of type
 --   @(FileEntry, a)@, where is the return value from the predicate at each
 --   step.
-findFiles :: (MonadIO m, MonadResource m)
-          => FindOptions
-          -> FilePath
-          -> CondT FileEntry m a
-          -> Producer m (FileEntry, a)
-findFiles opts startPath predicate =
+findFilesSource :: (MonadIO m, MonadResource m)
+                => FindOptions
+                -> FilePath
+                -> CondT FileEntry m a
+                -> Producer m (FileEntry, a)
+findFilesSource opts startPath predicate =
     wrap $ go (newFileEntry startPath 0 opts) $ hoist lift predicate
   where
     wrap = mapInput (const ()) (const Nothing)
 
-    go x pr = applyCondT x pr $ \e mb mcond ->
-        if findContentsFirst (entryFindOptions e)
-            then walkChildren e mcond >> yieldEntry e mb
-            else yieldEntry e mb >> walkChildren e mcond
+    go x pr = applyCondT x pr $ \e mb mcond -> do
+        let opts' = entryFindOptions e
+            this  = unless (findIgnoreResults opts') $
+                        yieldEntry e mb
+            next  = walkChildren e mcond
+        if findContentsFirst opts'
+            then next >> this
+            else this >> next
 
     yieldEntry e mb =
         -- If the item matched, also yield the predicate's result value.
@@ -498,13 +504,15 @@ findFiles opts startPath predicate =
                 (sourceDirectory path =$) $ awaitForever $ \fp ->
                     wrap $ go (newFileEntry fp (succ depth) opts') cond
 
-findFiles_ :: (MonadIO m, MonadBaseControl IO m, MonadThrow m)
-           => FindOptions
-           -> FilePath
-           -> CondT FileEntry m a
-           -> m ()
-findFiles_ opts path predicate =
-    runResourceT $ findFiles opts path (hoist lift predicate) $$ sinkNull
+findFiles :: (MonadIO m, MonadBaseControl IO m, MonadThrow m)
+          => FindOptions
+          -> FilePath
+          -> CondT FileEntry m a
+          -> m ()
+findFiles opts path predicate =
+    runResourceT $ findFilesSource
+        opts { findIgnoreResults = True } path (hoist lift predicate)
+        $$ sinkNull
 
 -- | A simpler version of 'findFiles', which yields only 'FilePath' values,
 --   and ignores any values returned by the predicate action.
@@ -514,7 +522,7 @@ findFilePaths :: (MonadIO m, MonadResource m)
               -> CondT FileEntry m a
               -> Producer m FilePath
 findFilePaths opts path predicate =
-    findFiles opts path predicate =$= mapC (entryPath . fst)
+    findFilesSource opts path predicate =$= mapC (entryPath . fst)
 
 -- | Calls 'findFilePaths' with the default set of finding options.
 --   Equivalent to @findFilePaths defaultFindOptions@.

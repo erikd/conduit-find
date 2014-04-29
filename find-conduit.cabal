@@ -27,13 +27,14 @@ Library
       , conduit-combinators
       , attoparsec
       , system-filepath
-      , unix                 >= 2.5.1.1
+      , unix-compat          >= 0.4.1.1
       , text                 >= 0.11.3.1
       , regex-posix
       , mtl
       , semigroups
       , exceptions
       , time
+      , streaming-commons
       , transformers
       , transformers-base
       , mmorph
@@ -55,13 +56,14 @@ test-suite test
       , conduit-combinators
       , attoparsec
       , system-filepath
-      , unix                 >= 2.5.1.1
+      , unix-compat          >= 0.4.1.1
       , text                 >= 0.11.3.1
       , regex-posix
       , mtl
       , time
       , either
       , semigroups
+      , streaming-commons
       , exceptions
       , transformers
       , transformers-base
@@ -75,9 +77,9 @@ Test-suite doctests
     Main-is: doctest.hs
     Hs-source-dirs: test
     Build-depends:      
-          base
-        , directory    >= 1.0
-        , doctest      >= 0.8
-        , filepath     >= 1.3
-        , semigroups   >= 0.4
+        base
+      , directory    >= 1.0
+      , doctest      >= 0.8
+      , filepath     >= 1.3
+      , semigroups   >= 0.4
 

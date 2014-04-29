@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
@@ -21,9 +22,9 @@ module Data.Conduit.Find
 
     -- * Finding functions
       sourceFindFiles
-    , find
+    -- , find
     , findFiles
-    , findFilePaths
+    -- , findFilePaths
     , FindOptions(..)
     , defaultFindOptions
     , test
@@ -77,26 +78,38 @@ module Data.Conduit.Find
 import           Conduit
 import           Control.Applicative
 import           Control.Exception
-import           Control.Monad hiding (forM_, forM)
+import           Control.Monad
 import           Control.Monad.Morph
 import           Control.Monad.State.Class
 import           Data.Attoparsec.Text as A
 import           Data.Bits
+import qualified Data.ByteString as B
+import           Data.ByteString.Unsafe
+import           Data.Char (ord)
 import qualified Data.Cond as Cond
 import           Data.Cond hiding (test)
 import qualified Data.Conduit.Filesystem as CF
 #if LEAFOPT
 import           Data.IORef
 #endif
-import           Data.Maybe (fromMaybe)
+import           Data.Maybe (fromMaybe, fromJust)
 import           Data.Monoid
+import qualified Data.Streaming.Filesystem as F
+import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as VM
 import           Data.Text (Text, unpack, pack)
+import           Data.Text.Encoding
 import           Data.Time
 import           Data.Time.Clock.POSIX
-import           Filesystem.Path.CurrentOS (FilePath,
+import           Foreign
+import           Foreign.C
+import           Filesystem.Path.CurrentOS (FilePath, toText,
                                             encodeString, decodeString)
 import           Prelude hiding (FilePath)
 import qualified System.FilePath as FP
+import           System.Posix.ByteString.FilePath
+-- import           System.Posix.Directory.ByteString hiding (readDirStream)
+import           System.Posix.FilePath
 import           System.PosixCompat.Files
 import           System.PosixCompat.Types
 import           Text.Regex.Posix ((=~))
@@ -214,14 +227,14 @@ defaultFindOptions = FindOptions
     }
 
 data FileEntry = FileEntry
-    { entryPath        :: !FP.FilePath
+    { entryPath        :: !RawFilePath
     , entryDepth       :: !Int
     , entryFindOptions :: !FindOptions
     , entryStatus      :: !(Maybe FileStatus)
       -- ^ This is Nothing until we determine stat should be called.
     }
 
-newFileEntry :: FP.FilePath -> Int -> FindOptions -> FileEntry
+newFileEntry :: RawFilePath -> Int -> FindOptions -> FileEntry
 newFileEntry fp d f = FileEntry fp d f Nothing
 
 instance Show FileEntry where
@@ -229,14 +242,14 @@ instance Show FileEntry where
               ++ show (entryPath entry)
               ++ " " ++ show (entryDepth entry)
 
-getFilePath :: Monad m => CondT FileEntry m FP.FilePath
+getFilePath :: Monad m => CondT FileEntry m RawFilePath
 getFilePath = gets entryPath
 
-pathname_ :: Monad m => (FP.FilePath -> Bool) -> CondT FileEntry m ()
+pathname_ :: Monad m => (RawFilePath -> Bool) -> CondT FileEntry m ()
 pathname_ f = guard . f =<< getFilePath
 
-filename_ :: Monad m => (FP.FilePath -> Bool) -> CondT FileEntry m ()
-filename_ f = pathname_ (f . FP.takeFileName)
+filename_ :: Monad m => (RawFilePath -> Bool) -> CondT FileEntry m ()
+filename_ f = pathname_ (f . takeFileName)
 
 getDepth :: Monad m => CondT FileEntry m Int
 getDepth = gets entryDepth
@@ -292,7 +305,7 @@ amin_ n = timeComp lastAccessed_ (n * 60)
 atime_ :: MonadIO m => Int -> CondT FileEntry m ()
 atime_ n = timeComp lastAccessed_ (n * 24 * 3600)
 
-anewer_ :: MonadIO m => FP.FilePath -> CondT FileEntry m ()
+anewer_ :: MonadIO m => RawFilePath -> CondT FileEntry m ()
 anewer_ path = do
     e  <- get
     es <- applyStat Nothing
@@ -333,7 +346,7 @@ mmin_
 mtime_
 -}
 
-name_ :: Monad m => FP.FilePath -> CondT FileEntry m ()
+name_ :: Monad m => RawFilePath -> CondT FileEntry m ()
 name_ = filename_ . (==)
 
 {-
@@ -358,11 +371,11 @@ xtype_ c
 
 ------------------------------------------------------------------------
 
-statFilePath :: Bool -> Bool -> FP.FilePath -> IO (Maybe FileStatus)
+statFilePath :: Bool -> Bool -> RawFilePath -> IO (Maybe FileStatus)
 statFilePath follow ignoreErrors path = do
     let doStat = (if follow
                   then getFileStatus
-                  else getSymbolicLinkStatus) path
+                  else getSymbolicLinkStatus) (unpack (decodeUtf8 path))
     catch (Just <$> doStat) $ \e ->
         if ignoreErrors
         then return Nothing
@@ -482,47 +495,33 @@ newDirCounter = return ()
 --   step.
 sourceFindFiles :: (MonadIO m, MonadResource m)
                 => FindOptions
-                -> FilePath
+                -> RawFilePath
                 -> CondT FileEntry m a
                 -> Producer m (FileEntry, a)
 sourceFindFiles findOptions startPath predicate = do
     startDc <- newDirCounter
-    walk startDc
-        (newFileEntry (encodeString startPath) 0 findOptions)
-        (encodeString startPath)
-        predicate
+    walkChildren startDc
+        (newFileEntry startPath 0 findOptions)
+        startPath
+        (Just predicate)
   where
-    walk :: MonadResource m
-         => DirCounter
-         -> FileEntry
-         -> FP.FilePath
-         -> CondT FileEntry m a
-         -> Producer m (FileEntry, a)
-    walk !dc !entry !path !cond = do
-        ((!mres, !mcond), !entry') <- lift $ applyCondT entry cond
-        let opts' = entryFindOptions entry
-            this  = unless (findIgnoreResults opts') $
-                        yieldEntry entry' mres
-            next  = walkChildren dc entry' path mcond
-        if findContentsFirst opts'
-            then next >> this
-            else this >> next
-      where
-        yieldEntry _      Nothing    = return ()
-        yieldEntry entry' (Just res) = yield (entry', res)
+    sep = fromIntegral (ord '/')
 
     walkChildren :: MonadResource m
                  => DirCounter
                  -> FileEntry
-                 -> FP.FilePath
+                 -> RawFilePath
                  -> Maybe (CondT FileEntry m a)
                  -> Producer m (FileEntry, a)
     walkChildren _ _ _ Nothing = return ()
     -- If the conditional matched, we are requested to recurse if this is a
     -- directory
     walkChildren !dc !entry !path (Just !cond) = do
-        st <- lift $ checkIfDirectory dc entry path
-        when (fmap isDirectory st == Just True) $ do
+            let path' = if B.last path == sep
+                        then path
+                        else B.snoc path sep
+        -- st <- lift $ checkIfDirectory dc entry path
+        -- when (fmap isDirectory st == Just True) $ do
 #if LEAFOPT
             -- Update directory count for the parent directory.
             liftIO $ modifyIORef dc pred
@@ -536,11 +535,59 @@ sourceFindFiles findOptions startPath predicate = do
             let dc'   = dc
                 opts' = entryFindOptions entry
 #endif
-            CF.sourceDirectory path =$= awaitForever (go dc' opts')
+#if SIZEOPT
+            let lc = linkCount (fromJust st) - 2
+            v <- liftIO $ VM.new (fromIntegral lc)
+            liftIO $ bracket
+                (Dir.openDirStream path)
+                Dir.closeDirStream
+                (readDir v 0)
+            fps <- liftIO $ V.unsafeFreeze v
+            V.forM_ fps $ \fp -> do
+#else
+            fps <- liftIO $ bracket
+                (openDirStream path)
+                closeDirStream
+                (readDir [])
+
+            forM_ fps $ \fp -> do
+#endif
+                let fp' = B.append path' (fst fp)
+                    child = newFileEntry fp'
+                        (succ (entryDepth entry)) opts'
+
+                ((!mres, !mcond), !child') <- lift $ applyCondT child cond
+
+                let copts' = entryFindOptions child'
+                    this  = unless (findIgnoreResults copts') $
+                                case mres of
+                                    Nothing  -> return ()
+                                    Just res -> yield (child', res)
+                    next  = when (snd fp) $ walkChildren dc child' fp' mcond
+
+                if findContentsFirst copts'
+                    then next >> this
+                    else this >> next
       where
-        go dc' opts' fp =
-            let entry' = newFileEntry fp (succ (entryDepth entry)) opts'
-            in walk dc' entry' fp cond
+#if SIZEOPT
+        readDir v i ds = do
+            p <- readDirStream ds
+            case fst p of
+                ""   -> return ()
+                "."  -> readDir v i ds
+                ".." -> readDir v i ds
+                _    -> do
+                    VM.write v i p
+                    readDir v (succ i) ds
+#else
+        readDir acc ds = do
+            p <- readDirStream ds
+            case fst p of
+                ""   -> return acc
+                "."  -> readDir acc ds
+                ".." -> readDir acc ds
+                _    -> readDir (p:acc) ds
+#endif
 
     -- Return True if the given entry is a directory.  We can sometimes use
     -- "leaf optimization" on Linux to answer this question without performing
@@ -550,7 +597,7 @@ sourceFindFiles findOptions startPath predicate = do
     checkIfDirectory :: MonadResource m
                      => DirCounter
                      -> FileEntry
-                     -> FP.FilePath
+                     -> RawFilePath
                      -> m (Maybe FileStatus)
     checkIfDirectory !dc !entry !path = do
 #if LEAFOPT
@@ -569,6 +616,86 @@ sourceFindFiles findOptions startPath predicate = do
                 path
             else return Nothing
 
+type CDir = ()
+type CDirent = ()
+type DirStream = Ptr CDir
+
+-- | @openDirStream dir@ calls @opendir@ to obtain a
+--   directory stream for @dir@.
+openDirStream :: RawFilePath -> IO DirStream
+openDirStream name =
+  withFilePath name $ \s ->
+    throwErrnoPathIfNullRetry "openDirStream" name $ c_opendir s
+
+foreign import ccall unsafe "__hsunix_opendir"
+   c_opendir :: CString  -> IO (Ptr CDir)
+
+-- | @readDirStream dp@ calls @readdir@ to obtain the
+--   next directory entry (@struct dirent@) for the open directory
+--   stream @dp@, and returns the @d_name@ member of that
+--  structure.
+readDirStream :: DirStream -> IO (RawFilePath, Bool)
+readDirStream dirp =
+  alloca $ \ptr_dEnt  -> loop ptr_dEnt
+ where
+  loop ptr_dEnt = do
+    resetErrno
+    r <- c_readdir dirp ptr_dEnt
+    if (r == 0)
+	 then do dEnt <- peek ptr_dEnt
+		 if (dEnt == nullPtr)
+                    then return (B.empty, False)
+		    else do
+#if 0
+                     cstr <- d_name dEnt
+                     len <- d_namlen dEnt
+                     typ <- d_type dEnt
+
+                     -- -- This code is slower than just peeking and copying
+                     -- entry <- unsafePackCStringFinalizer
+                     --     (castPtr cstr) (fromIntegral len) (c_freeDirEnt dEnt)
+#else
+                     len <- fromIntegral <$> d_namlen dEnt
+                     entry <- (d_name dEnt >>= \p -> peekFilePathLen (p, len))
+                     typ <- d_type dEnt
+		     c_freeDirEnt dEnt
+#endif
+		     return (entry, typ .&. 4 /= 0)
+	 else do errno <- getErrno
+		 if (errno == eINTR) then loop ptr_dEnt else do
+		 let (Errno eo) = errno
+		 if (eo == 0)
+                    then return (B.empty, False)
+		    else throwErrno "readDirStream"
+
+-- traversing directories
+foreign import ccall unsafe "__hscore_readdir"
+  c_readdir  :: Ptr CDir -> Ptr (Ptr CDirent) -> IO CInt
+
+foreign import ccall unsafe "__hscore_free_dirent"
+  c_freeDirEnt  :: Ptr CDirent -> IO ()
+
+foreign import ccall unsafe "__hscore_d_name"
+  d_name :: Ptr CDirent -> IO CString
+
+foreign import ccall unsafe "__hscore_d_namlen"
+  d_namlen :: Ptr CDirent -> IO CUInt
+
+foreign import ccall unsafe "__hscore_d_type"
+  d_type :: Ptr CDirent -> IO CUInt
+
+-- | @closeDirStream dp@ calls @closedir@ to close
+--   the directory stream @dp@.
+closeDirStream :: DirStream -> IO ()
+closeDirStream dirp =
+  throwErrnoIfMinus1Retry_ "closeDirStream" (c_closedir dirp)
+
+foreign import ccall unsafe "closedir"
+   c_closedir :: Ptr CDir -> IO CInt
+
+convertPath :: FilePath -> RawFilePath
+convertPath fp = either encodeUtf8 encodeUtf8 (toText fp)
+
 findFiles :: (MonadIO m, MonadBaseControl IO m, MonadThrow m)
           => FindOptions
           -> FilePath
@@ -576,37 +703,37 @@ findFiles :: (MonadIO m, MonadBaseControl IO m, MonadThrow m)
           -> m ()
 findFiles opts path predicate =
     runResourceT $
-        sourceFindFiles opts { findIgnoreResults = True } path
+        sourceFindFiles opts { findIgnoreResults = True } (convertPath path)
             (hoist lift predicate) $$ sinkNull
 
--- | A simpler version of 'findFiles', which yields only 'FilePath' values,
---   and ignores any values returned by the predicate action.
-findFilePaths :: (MonadIO m, MonadResource m)
-              => FindOptions
-              -> FilePath
-              -> CondT FileEntry m a
-              -> Producer m FilePath
-findFilePaths opts path predicate =
-    mapOutput decodeString $
-        sourceFindFiles opts path predicate =$= mapC (entryPath . fst)
+-- -- | A simpler version of 'findFiles', which yields only 'FilePath' values,
+-- --   and ignores any values returned by the predicate action.
+-- findFilePaths :: (MonadIO m, MonadResource m)
+--               => FindOptions
+--               -> FilePath
+--               -> CondT FileEntry m a
+--               -> Producer m FilePath
+-- findFilePaths opts path predicate =
+--     mapOutput decodeString $
+--         sourceFindFiles opts path predicate =$= mapC (entryPath . fst)
 
--- | Calls 'findFilePaths' with the default set of finding options.
---   Equivalent to @findFilePaths defaultFindOptions@.
-find :: (MonadIO m, MonadResource m)
-     => FilePath -> CondT FileEntry m a -> Producer m FilePath
-find = findFilePaths defaultFindOptions
+-- -- | Calls 'findFilePaths' with the default set of finding options.
+-- --   Equivalent to @findFilePaths defaultFindOptions@.
+-- find :: (MonadIO m, MonadResource m)
+--      => FilePath -> CondT FileEntry m a -> Producer m FilePath
+-- find = findFilePaths defaultFindOptions
 
 -- | Test a file path using the same type of predicate that is accepted by
 --   'findFiles'.
 test :: MonadIO m => CondT FileEntry m () -> FilePath -> m Bool
 test matcher path =
-    Cond.test (newFileEntry (encodeString path) 0 defaultFindOptions) matcher
+    Cond.test (newFileEntry (convertPath path) 0 defaultFindOptions) matcher
 
 -- | Test a file path using the same type of predicate that is accepted by
 --   'findFiles', but do not follow symlinks.
 ltest :: MonadIO m => CondT FileEntry m () -> FilePath -> m Bool
 ltest matcher path =
     Cond.test
-        (newFileEntry (encodeString path) 0 defaultFindOptions
+        (newFileEntry (convertPath path) 0 defaultFindOptions
             { findFollowSymlinks = False })
         matcher

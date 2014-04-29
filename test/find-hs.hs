@@ -1,13 +1,21 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Main where
 
 import Conduit
 import Control.Monad
 import Control.Monad.Reader.Class
 import Data.Conduit.Find
-import Data.List
+import Data.Conduit.Filesystem as CF
+import Data.ByteString
+import qualified Data.List as L
 import Filesystem.Path.CurrentOS
 import System.Environment
 import System.Posix.Process
+import qualified Data.Text as T
+import Data.Text.Encoding
+import Prelude hiding (putStrLn)
+import qualified Prelude as P
 
 main :: IO ()
 main = do
@@ -16,9 +24,9 @@ main = do
         "conduit" -> do
             putStrLn "Running sourceDirectoryDeep from conduit-extra"
             runResourceT $
-                sourceDirectoryDeep False (decodeString dir)
-                    =$ filterC ((".hs" `isSuffixOf`) . encodeString)
-                    $$ mapM_C (liftIO . putStrLn . encodeString)
+                CF.sourceDirectoryDeep False dir
+                    =$ filterC (".hs" `L.isSuffixOf`)
+                    $$ mapM_C (liftIO . P.putStrLn)
 
         "find-conduit" -> do
             putStrLn "Running findFiles from find-conduit"
@@ -33,7 +41,7 @@ main = do
             putStrLn "Running findFiles from find-conduit"
             runResourceT $
                 sourceFindFiles defaultFindOptions { findFollowSymlinks = False }
-                    (decodeString dir) (return ())
+                    (encodeUtf8 (T.pack dir)) (return ())
                     =$ filterC ((".hs" `isSuffixOf`) . entryPath . fst)
                     $$ mapM_C (liftIO . putStrLn . entryPath . fst)
 

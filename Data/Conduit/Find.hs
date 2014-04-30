@@ -93,6 +93,7 @@ import           Data.Text (Text, unpack, pack)
 import           Data.Text.Encoding
 import           Data.Time
 import           Data.Time.Clock.POSIX
+import           Data.Word (Word8)
 import           Filesystem.Path.CurrentOS (FilePath, toText)
 import           Prelude hiding (FilePath)
 import           System.Posix.ByteString.FilePath
@@ -457,8 +458,7 @@ sourceFindFiles findOptions startPath =
 
         if findPreloadDirectories opts
             then do
-                fps <- liftIO $
-                    getDirectoryContentsAndAttrs path
+                fps <- liftIO $ getDirectoryContentsAndAttrs path
                 forM_ fps $ mapInput undefined (const Nothing) . worker
             else
                 sourceDirectory path =$= awaitForever worker
@@ -507,26 +507,48 @@ sourceFindFiles findOptions startPath =
 ioFindFiles :: FindOptions -> RawFilePath -> CondT FileEntry IO a -> IO ()
 ioFindFiles findOptions startPath =
     walkChildren (newFileEntry startPath 0 findOptions)
-  where
-    sep = fromIntegral (ord '/')
 
-    walkChildren !entry !cond = do
-        let !path      = B.snoc (entryPath entry) sep
-            !opts      = entryFindOptions entry
-            !nextDepth = succ (entryDepth entry)
-            f !acc (!fp, !isDir) = do
-                let !childPath = B.append path fp
-                    !child     = newFileEntry childPath nextDepth opts
-                ((_, !mcond), !child') <- applyCondT child cond
-                return $ case mcond of
-                    Nothing -> acc
-                    Just !cond'
-                        | isDir -> (child', cond'):acc
-                        | otherwise -> acc
+sep :: Word8
+sep = fromIntegral (ord '/')
 
-        !fps <- getDirectoryContentsAndAttrs path
-        !subdirs <- foldM f [] fps
-        forM_ subdirs $ uncurry walkChildren
+walkChildren :: FileEntry -> CondT FileEntry IO a -> IO ()
+walkChildren !entry !cond = do
+    let !path      = B.snoc (entryPath entry) sep
+        !opts      = entryFindOptions entry
+        !nextDepth = succ (entryDepth entry)
+    !fps <- getDirectoryContentsAndAttrs path
+    if findDepthFirst opts
+        then do
+            let f _ Nothing  = return ()
+                f _ (Just x) = uncurry walkChildren x
+            forM_ fps $ handleEntry opts path cond nextDepth (f ())
+        else do
+            let f acc Nothing  = return acc
+                f acc (Just x) = return (x:acc)
+            dirs <- (\k -> foldM k [] fps) $ \acc ->
+                handleEntry opts path cond nextDepth (f acc)
+            forM_ dirs $ uncurry walkChildren
+
+handleEntry :: FindOptions
+            -> RawFilePath
+            -> CondT FileEntry IO a
+            -> Int
+            -> (Maybe (FileEntry, CondT FileEntry IO a) -> IO b)
+            -> (RawFilePath, Bool)
+            -> IO b
+handleEntry opts path cond nextDepth f (!fp, !isDir) = do
+    let !childPath = B.append path fp
+        !child     = newFileEntry childPath nextDepth opts
+    ((_, !mcond), !child') <- applyCondT child cond
+    case mcond of
+        Nothing -> f Nothing
+        Just !cond'
+            | isDir ->
+                if findDepthFirst opts
+                then walkChildren child' cond' >> f Nothing
+                else f (Just (child', cond'))
+            | otherwise -> f Nothing
+{-# INLINE handleEntry #-}
 
 convertPath :: FilePath -> RawFilePath
 convertPath fp = either encodeUtf8 encodeUtf8 (toText fp)

@@ -19,6 +19,7 @@ data FindOptions = FindOptions
     , findIgnoreResults      :: !Bool
     , findLeafOptimization   :: !Bool
     , findPreloadDirectories :: !Bool
+    , findDepthFirst         :: !Bool
     }
 
 defaultFindOptions :: FindOptions
@@ -29,6 +30,7 @@ defaultFindOptions = FindOptions
     , findIgnoreResults      = False
     , findLeafOptimization   = True
     , findPreloadDirectories = False
+    , findDepthFirst         = True
     }
 
 data FileEntry = FileEntry

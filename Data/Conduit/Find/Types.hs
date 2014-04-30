@@ -17,18 +17,16 @@ data FindOptions = FindOptions
     , findContentsFirst      :: !Bool
     , findIgnoreErrors       :: !Bool
     , findIgnoreResults      :: !Bool
-    , findLeafOptimization   :: !Bool
     , findPreloadDirectories :: !Bool
     , findDepthFirst         :: !Bool
     }
 
 defaultFindOptions :: FindOptions
 defaultFindOptions = FindOptions
-    { findFollowSymlinks     = True
+    { findFollowSymlinks     = False
     , findContentsFirst      = False
     , findIgnoreErrors       = False
     , findIgnoreResults      = False
-    , findLeafOptimization   = True
     , findPreloadDirectories = False
     , findDepthFirst         = True
     }

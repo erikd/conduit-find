@@ -31,10 +31,7 @@ main = do
 
         "find-conduit" -> do
             putStrLn "Running findFiles from find-conduit"
-            findFiles
-                defaultFindOptions
-                    { findFollowSymlinks = False
-                    }
+            findFiles defaultFindOptions
                 (decodeString dir) $ do
                     path <- asks entryPath
                     guard (".hs" `isSuffixOf` path)
@@ -45,8 +42,7 @@ main = do
             putStrLn "Running findFiles from find-conduit"
             findFiles
                 defaultFindOptions
-                    { findFollowSymlinks     = False
-                    , findPreloadDirectories = True
+                    { findPreloadDirectories = True
                     }
                 (decodeString dir) $ do
                     path <- asks entryPath
@@ -55,20 +51,26 @@ main = do
                     liftIO $ putStrLn path
 
         "find-conduit-io" -> do
-            putStrLn "Running ioFindFiles from find-conduit"
-            ioFindFiles
-                defaultFindOptions { findFollowSymlinks = False }
+            putStrLn "Running findFilesIO from find-conduit"
+            findFilesIO
+                defaultFindOptions
                 (encodeUtf8 (T.pack dir)) $ do
                     path <- asks entryPath
                     guard (".hs" `isSuffixOf` path)
-                    norecurse
                     liftIO $ putStrLn path
+
+        "find-conduit-io-paths" -> do
+            putStrLn "Running findFilePathsIO from find-conduit"
+            findFilePathsIO
+                defaultFindOptions
+                (encodeUtf8 (T.pack dir))
+                (filename_ (".hs" `isSuffixOf`))
+                putStrLn
 
         -- "find-conduit-gather" -> do
         --     putStrLn "Running parFindFiles from find-conduit"
         --     gatherFrom 128 (\queue ->
-        --             ioFindFiles
-        --                 defaultFindOptions { findFollowSymlinks = False }
+        --             findFilesIO defaultFindOptions
         --                 (encodeUtf8 (T.pack dir)) $ do
         --                     path <- asks entryPath
         --                     guard (".hs" `isSuffixOf` path)
@@ -79,7 +81,7 @@ main = do
         "find-conduit-source" -> do
             putStrLn "Running findFiles from find-conduit"
             runResourceT $
-                sourceFindFiles defaultFindOptions { findFollowSymlinks = False }
+                sourceFindFiles defaultFindOptions
                     (encodeUtf8 (T.pack dir)) (return ())
                     =$ filterC ((".hs" `isSuffixOf`) . entryPath . fst)
                     $$ mapM_C (liftIO . putStrLn . entryPath . fst)

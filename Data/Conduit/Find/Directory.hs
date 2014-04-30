@@ -28,50 +28,53 @@ type DirStream = Ptr CDir
 openDirStream :: RawFilePath -> IO DirStream
 openDirStream name = withFilePath name $ \s ->
     throwErrnoPathIfNullRetry "openDirStream" name $ c_opendir s
+{-# INLINE openDirStream #-}
 
 foreign import ccall unsafe "__hsunix_opendir"
    c_opendir :: CString  -> IO (Ptr CDir)
 
-getDirectoryContentsAndAttrs :: RawFilePath -> IO [(RawFilePath, Bool)]
-getDirectoryContentsAndAttrs path =
+getDirectoryContentsAndAttrs :: RawFilePath -> IO [(RawFilePath, CUInt)]
+getDirectoryContentsAndAttrs path = do
+    resetErrno
     bracket
         (openDirStream path)
         closeDirStream
         (allocaBytes (fromIntegral c_sizeof_dirent) . readDir [])
   where
     readDir !acc ds direntp = do
-        (p, isDir) <- readDirStream ds direntp
-        case p of
+        res <- readDirStream ds direntp
+        case fst res of
             ""   -> return acc
             "."  -> readDir acc ds direntp
             ".." -> readDir acc ds direntp
-            _    -> readDir ((p, isDir):acc) ds direntp
+            _    -> readDir (res:acc) ds direntp
+{-# INLINE getDirectoryContentsAndAttrs #-}
 
 sourceDirectory :: MonadResource m
-                => RawFilePath -> Producer m (RawFilePath, Bool)
+                => RawFilePath -> Producer m (RawFilePath, CUInt)
 sourceDirectory dir =
     bracketP (openDirStream dir) closeDirStream go
   where
     go ds = loop
       where
         loop = do
-            (fp, isDir) <- liftIO $ readDirStream ds nullPtr
-            case fp of
+            res <- liftIO $ readDirStream ds nullPtr
+            case fst res of
                 ""   -> return ()
                 "."  -> loop
                 ".." -> loop
-                _    -> yield (fp, isDir) >> loop
+                _    -> yield res >> loop
+{-# INLINE sourceDirectory #-}
 
 -- | @readDirStream dp@ calls @readdir@ to obtain the next directory entry
 --   (@struct dirent@) for the open directory stream @dp@, and returns the
 --   @d_name@ member of that structure.
-readDirStream :: DirStream -> Ptr CDirent -> IO (RawFilePath, Bool)
+readDirStream :: DirStream -> Ptr CDirent -> IO (RawFilePath, CUInt)
 readDirStream dirp direntp = alloca loop
   where
-    noresult = (B.empty, False)
+    noresult = (B.empty, 0)
 
     loop ptr_dEnt = do
-        resetErrno
         r <- c_readdir_r dirp direntp ptr_dEnt
         if r == 0
             then do
@@ -90,17 +93,22 @@ readDirStream dirp direntp = alloca loop
                             else throwErrno "readDirStream"
 
     readEntry dEnt = do
-        len   <- fromIntegral <$> d_namlen dEnt
-        entry <- d_name dEnt >>= \p -> peekFilePathLen (p, len)
+        !len   <- fromIntegral <$> d_namlen dEnt
+        !entry <- d_name dEnt >>= \p -> peekFilePathLen (p, len)
 
         -- We can sometimes use "leaf optimization" on Linux to answer this
         -- question without performing a stat call.  This is possible because
         -- the link count of a directory is two more than the number of
         -- sub-directories it contains, so we've seen that many
         -- sub-directories, the remaining entries must be files.
-        typ <- d_type dEnt
-        let !isDir = typ == 4
-        return (entry, isDir)
+        !typ <- d_type dEnt
+        return (entry, typ)
+{-# INLINE readDirStream #-}
+
+statIsDirectory :: RawFilePath -> IO Bool
+statIsDirectory path =
+    maybe False isDirectory <$> statFilePath True True path
+{-# INLINE statIsDirectory #-}
 
 statFilePath :: Bool -> Bool -> RawFilePath -> IO (Maybe FileStatus)
 statFilePath follow ignoreErrors path = do
@@ -111,6 +119,7 @@ statFilePath follow ignoreErrors path = do
         if ignoreErrors
         then return Nothing
         else throwIO (e :: IOException)
+{-# INLINE statFilePath #-}
 
 -- | Get the current status for the file.  If the status being requested is
 --   already cached in the entry information, simply return it from there.
@@ -134,6 +143,7 @@ getStat mfollow entry = case entryStatus entry of
         (entryPath entry)
       where
         opts = entryFindOptions entry
+{-# INLINE getStat #-}
 
 -- traversing directories
 foreign import ccall unsafe "__hscore_readdir"
@@ -161,6 +171,7 @@ foreign import ccall unsafe "__hscore_d_type"
 closeDirStream :: DirStream -> IO ()
 closeDirStream dirp =
   throwErrnoIfMinus1Retry_ "closeDirStream" (c_closedir dirp)
+{-# INLINE closeDirStream #-}
 
 foreign import ccall unsafe "closedir"
    c_closedir :: Ptr CDir -> IO CInt

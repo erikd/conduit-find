@@ -4,6 +4,7 @@
 
 module Data.Conduit.Find.Directory where
 
+import           Conduit
 import           Control.Applicative
 import           Control.Exception
 import           Control.Monad
@@ -16,6 +17,7 @@ import           Foreign.C
 import           Prelude hiding (FilePath)
 import           System.Posix.ByteString.FilePath
 import           System.Posix.Files.ByteString
+import           System.Posix.FilePath
 
 getDirectoryContentsAndAttrs :: RawFilePath -> Int -> Bool
                              -> IO [(RawFilePath, Maybe Bool)]
@@ -159,3 +161,21 @@ closeDirStream dirp =
 
 foreign import ccall unsafe "closedir"
    c_closedir :: Ptr CDir -> IO CInt
+
+sourceDirectory :: MonadResource m
+                => RawFilePath -> Int -> Bool
+                -> Producer m (RawFilePath, Maybe Bool)
+sourceDirectory dir links hasDtType =
+    bracketP (openDirStream dir) closeDirStream go
+  where
+    go ds = loop links
+      where
+        loop lc = do
+            (fp, isDir) <- liftIO $ readDirStream ds (lc == 0) hasDtType
+            case fp of
+                "" -> return ()
+                _ -> do
+                    yield (dir </> fp, isDir)
+                    loop $ if isDir == Just True && lc >= 0
+                           then lc - 1
+                           else lc

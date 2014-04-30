@@ -74,7 +74,7 @@ module Data.Conduit.Find
     , FileEntry(..)
     ) where
 
-import           Conduit
+import           Conduit hiding (sourceDirectory)
 import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Morph
@@ -86,7 +86,6 @@ import           Data.Char (ord)
 import qualified Data.Cond as Cond
 import           Data.Cond hiding (test)
 import           Data.Conduit.Find.Directory
-import           Data.Conduit.Find.EParIO
 import           Data.Conduit.Find.Types
 import           Data.Monoid
 import           Data.Text (Text, unpack, pack)
@@ -196,12 +195,12 @@ to the full file information after the stat.
 See 'Data.Cond' for more details on the Monad used to build predicates.
 -}
 
-getFilePath :: Monad m => CondT FileEntry m RawFilePath
-getFilePath = gets entryPath
-{-# INLINE getFilePath #-}
+getEntryPath :: Monad m => CondT FileEntry m RawFilePath
+getEntryPath = gets entryPath
+{-# INLINE getEntryPath #-}
 
 pathname_ :: Monad m => (RawFilePath -> Bool) -> CondT FileEntry m ()
-pathname_ f = guard . f =<< getFilePath
+pathname_ f = guard . f =<< getEntryPath
 {-# INLINE pathname_ #-}
 
 filename_ :: Monad m => (RawFilePath -> Bool) -> CondT FileEntry m ()
@@ -454,27 +453,46 @@ sourceFindFiles findOptions startPath =
         let path      = B.snoc (entryPath entry) sep
             opts      = entryFindOptions entry
             nextDepth = succ (entryDepth entry)
+            worker    = uncurry $ handleEntry opts path nextDepth cond
 
         -- jww (2014-04-30): Instead of True here, we need to determine if the
         -- filesystem supports the dirent->dt_type field.
-        fps <- liftIO $ getDirectoryContentsAndAttrs path links True
-        forM_ fps $ \(fp, misDir) -> do
-            let childPath = B.append path fp
-                child     = newFileEntry childPath nextDepth opts
+        let hasDtType = True
 
-            ((!mres, !mcond), !child') <- lift $ applyCondT child cond
+        if findPreloadDirectories opts
+            then do
+                fps <- liftIO $
+                    getDirectoryContentsAndAttrs path links hasDtType
+                forM_ fps worker
+            else
+                sourceDirectory path links hasDtType =$= awaitForever worker
 
-            let opts' = entryFindOptions child'
-                this = case mres of
-                    Nothing -> return ()
-                    Just res
-                        | findIgnoreResults opts' -> return ()
-                        | otherwise -> yield (child', res)
-                next = handleTree child' misDir mcond
+    handleEntry :: MonadResource m
+                => FindOptions
+                -> RawFilePath
+                -> Int
+                -> CondT FileEntry m a
+                -> RawFilePath
+                -> Maybe Bool
+                -> Producer m (FileEntry, a)
+    handleEntry opts path nextDepth cond fp misDir = do
+        let childPath = B.append path fp
+            child     = newFileEntry childPath nextDepth opts
 
-            if findContentsFirst opts'
-                then next >> this
-                else this >> next
+        ((!mres, !mcond), !child') <- lift $ applyCondT child cond
+
+        let opts' = entryFindOptions child'
+            this = case mres of
+                Nothing -> return ()
+                Just res
+                    | findIgnoreResults opts' -> return ()
+                    | otherwise -> yield (child', res)
+            next = handleTree child' misDir mcond
+
+        if findContentsFirst opts'
+            then next >> this
+            else this >> next
+    {-# INLINE handleEntry #-}
 
     handleTree :: MonadResource m
                => FileEntry
@@ -484,9 +502,9 @@ sourceFindFiles findOptions startPath =
     handleTree _ _ Nothing      = return ()
     handleTree _ (Just False) _ = return ()
 #if !LEAFOPT
-    -- If we cannot perform leaf optimization, there is no benefit to doing
-    -- another stat just to read the link count, since we already know this
-    -- is a directory.
+    -- If we cannot perform leaf optimization, there is no benefit to doing a
+    -- stat to read the link count, since we already know this is a directory
+    -- and the link count does not avail us.
     handleTree entry (Just True) (Just cond) =
         walkChildren entry (-1) cond
 #endif

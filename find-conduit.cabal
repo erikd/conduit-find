@@ -22,111 +22,72 @@ Library
     Include-dirs:     .
     c-sources:	      Helper.c
     if os(linux)
-        cpp-options: -DLEAFOPT=1
+        cpp-options: -DHAVE_READDIR_R=1
+    if os(darwin)
+        cpp-options: -DHAVE_READDIR_R=1
     build-depends:
         base                 >= 3 && < 5
-      , conduit
-      , conduit-extra
-      , conduit-combinators
       , attoparsec
-      , system-filepath
-      , unix
-      , unix-compat          >= 0.4.1.1
-      , text                 >= 0.11.3.1
-      , regex-posix
-      , mtl
-      , semigroups
+      , bytestring
+      , conduit-combinators
+      , either
       , exceptions
+      , filepath
+      , mmorph
+      , monad-control
+      , mtl
+      , posix-paths
+      , regex-posix
+      , semigroups
+      , system-filepath
+      , text                 >= 0.11.3.1
       , time
-      , streaming-commons
       , transformers
       , transformers-base
-      , mmorph
-      , either
-      , monad-control
-      , filepath
-      , vector
-      , posix-paths
-      , monad-par
-      , bytestring
+      , unix
+      , unix-compat          >= 0.4.1.1
     exposed-modules:
         Data.Cond
         Data.Conduit.Find
         Data.Conduit.Find.Directory
         Data.Conduit.Find.Types
 
--- test-suite test
---     hs-source-dirs: test
---     default-language: Haskell2010
---     main-is: main.hs
---     type: exitcode-stdio-1.0
---     ghc-options: -Wall -threaded
---     build-depends:
---         base
---       , find-conduit
---       , conduit
---       , conduit-combinators
---       , attoparsec
---       , system-filepath
---       , unix
---       , unix-compat          >= 0.4.1.1
---       , text                 >= 0.11.3.1
---       , regex-posix
---       , mtl
---       , time
---       , either
---       , semigroups
---       , streaming-commons
---       , exceptions
---       , transformers
---       , transformers-base
---       , monad-control
---       , mmorph
---       , filepath
---       , vector
---       , posix-paths
---       , bytestring
---       , hspec                >= 1.4
+test-suite test
+    hs-source-dirs: test
+    default-language: Haskell2010
+    main-is: main.hs
+    type: exitcode-stdio-1.0
+    ghc-options: -Wall -threaded
+    build-depends:
+        base
+      , conduit-combinators
+      , find-conduit
+      , hspec                >= 1.4
 
--- Test-suite doctests
---     Default-language: Haskell98
---     Type:    exitcode-stdio-1.0
---     Main-is: doctest.hs
---     Hs-source-dirs: test
---     Build-depends:      
---         base
---       , directory    >= 1.0
---       , doctest      >= 0.8
---       , filepath     >= 1.3
---       , semigroups   >= 0.4
+Test-suite doctests
+    Default-language: Haskell98
+    Type:    exitcode-stdio-1.0
+    Main-is: doctest.hs
+    Hs-source-dirs: test
+    Build-depends:      
+        base
+      , directory    >= 1.0
+      , doctest      >= 0.8
+      , filepath     >= 1.3
+      , semigroups   >= 0.4
 
 Executable find-hs
+    default-language: Haskell98
     Main-is:     find-hs.hs
-    Ghc-options: -threaded -O2
+    Ghc-options: -O2
     Hs-source-dirs: test
     Build-depends:
         base
       , find-conduit
-      , conduit
-      , conduit-extra
-      , conduit-combinators
-      , attoparsec
-      , system-filepath
-      , unix                 >= 0.4.1.1
-      , text                 >= 0.11.3.1
-      , regex-posix
-      , mtl
-      , time
-      , either
-      , semigroups
-      , streaming-commons
-      , exceptions
-      , transformers
-      , transformers-base
-      , monad-control
-      , mmorph
-      , filepath
-      , vector
-      , posix-paths
-      , monad-par
       , bytestring
+      , conduit-combinators
+      , conduit-extra
+      , mtl
+      , system-filepath
+      , text                 >= 0.11.3.1
+      , unix                 >= 0.4.1.1

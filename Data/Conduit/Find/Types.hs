@@ -1,5 +1,8 @@
+{-# LANGUAGE TypeFamilies #-}
+
 module Data.Conduit.Find.Types where
 
+import           Data.ByteString (ByteString)
 import           Data.Text
 import           Data.Text.Encoding
 import           Filesystem.Path.CurrentOS
@@ -48,7 +51,7 @@ class IsFilePath a where
     getFilePath    :: a -> FilePath
     getStrFilePath :: a -> FP.FilePath
 
-instance IsFilePath RawFilePath where
+instance IsFilePath ByteString where
     getRawFilePath = id
     getFilePath    = fromText . decodeUtf8
     getStrFilePath = unpack . decodeUtf8
@@ -58,7 +61,7 @@ instance IsFilePath FilePath where
     getFilePath    = id
     getStrFilePath = encodeString
 
-instance IsFilePath FP.FilePath where
+instance a ~ Char => IsFilePath [a] where
     getRawFilePath = encodeUtf8 . pack
     getFilePath    = decodeString
     getStrFilePath = id

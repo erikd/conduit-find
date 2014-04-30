@@ -1,6 +1,8 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Data.Conduit.Find.Directory where
 
@@ -8,7 +10,6 @@ import           Conduit
 import           Control.Applicative
 import           Control.Exception
 import           Control.Monad
-import           Data.Bits
 import qualified Data.ByteString as B
 import           Data.Conduit.Find.Types
 import           Data.Maybe (fromMaybe)
@@ -17,28 +18,6 @@ import           Foreign.C
 import           Prelude hiding (FilePath)
 import           System.Posix.ByteString.FilePath
 import           System.Posix.Files.ByteString
-import           System.Posix.FilePath
-
-getDirectoryContentsAndAttrs :: RawFilePath -> Int -> Bool
-                             -> IO [(RawFilePath, Maybe Bool)]
-getDirectoryContentsAndAttrs path links hasDtType =
-    bracket
-        (openDirStream path)
-        closeDirStream
-        (readDir [] links)
-  where
-    readDir acc lc ds = do
-        (p, isDir) <- readDirStream ds (lc == 0) hasDtType
-        case p of
-            ""   -> return acc
-            "."  -> readDir acc (lc - 1) ds
-            ".." -> readDir acc (lc - 1) ds
-            _    -> readDir
-                ((p, isDir):acc)
-                (if isDir == Just True && lc >= 0
-                 then lc - 1
-                 else lc)
-                ds
 
 type CDir = ()
 type CDirent = ()
@@ -53,28 +32,53 @@ openDirStream name = withFilePath name $ \s ->
 foreign import ccall unsafe "__hsunix_opendir"
    c_opendir :: CString  -> IO (Ptr CDir)
 
+getDirectoryContentsAndAttrs :: RawFilePath -> IO [(RawFilePath, Bool)]
+getDirectoryContentsAndAttrs path =
+    bracket
+        (openDirStream path)
+        closeDirStream
+        (allocaBytes (fromIntegral c_sizeof_dirent) . readDir [])
+  where
+    readDir !acc ds direntp = do
+        (p, isDir) <- readDirStream ds direntp
+        case p of
+            ""   -> return acc
+            "."  -> readDir acc ds direntp
+            ".." -> readDir acc ds direntp
+            _    -> readDir ((p, isDir):acc) ds direntp
+
+sourceDirectory :: MonadResource m
+                => RawFilePath -> Producer m (RawFilePath, Bool)
+sourceDirectory dir =
+    bracketP (openDirStream dir) closeDirStream go
+  where
+    go ds = loop
+      where
+        loop = do
+            (fp, isDir) <- liftIO $ readDirStream ds nullPtr
+            case fp of
+                ""   -> return ()
+                "."  -> loop
+                ".." -> loop
+                _    -> yield (fp, isDir) >> loop
+
 -- | @readDirStream dp@ calls @readdir@ to obtain the next directory entry
 --   (@struct dirent@) for the open directory stream @dp@, and returns the
 --   @d_name@ member of that structure.
---
--- jww (2014-04-30): Don't return Maybe Int for a directory's link count, but
--- the link count and the file type, since we can know the file type
--- statically through dt_type, and then tests like "regular" or "directory"
--- are always free.
-readDirStream :: DirStream -> Bool -> Bool -> IO (RawFilePath, Maybe Bool)
-readDirStream dirp noMoreDirs hasDtType = alloca loop
+readDirStream :: DirStream -> Ptr CDirent -> IO (RawFilePath, Bool)
+readDirStream dirp direntp = alloca loop
   where
-    noresult = (B.empty, Nothing)
+    noresult = (B.empty, False)
 
     loop ptr_dEnt = do
         resetErrno
-        r <- c_readdir dirp ptr_dEnt
+        r <- c_readdir_r dirp direntp ptr_dEnt
         if r == 0
             then do
                 dEnt <- peek ptr_dEnt
                 if dEnt == nullPtr
                     then return noresult
-                    else readEntry dEnt `finally` c_freeDirEnt dEnt
+                    else readEntry dEnt
             else do
                 errno <- getErrno
 		if errno == eINTR
@@ -94,16 +98,9 @@ readDirStream dirp noMoreDirs hasDtType = alloca loop
         -- the link count of a directory is two more than the number of
         -- sub-directories it contains, so we've seen that many
         -- sub-directories, the remaining entries must be files.
-        if noMoreDirs
-            then return (entry, Just False)
-            else
-                if hasDtType
-                then do
-                    typ <- d_type dEnt
-                    let isDir = typ .&. 4 /= 0
-                    return (entry, Just isDir)
-                else
-                    return (entry, Nothing)
+        typ <- d_type dEnt
+        let !isDir = typ == 4
+        return (entry, isDir)
 
 statFilePath :: Bool -> Bool -> RawFilePath -> IO (Maybe FileStatus)
 statFilePath follow ignoreErrors path = do
@@ -140,10 +137,16 @@ getStat mfollow entry = case entryStatus entry of
 
 -- traversing directories
 foreign import ccall unsafe "__hscore_readdir"
-  c_readdir  :: Ptr CDir -> Ptr (Ptr CDirent) -> IO CInt
+  c_readdir :: Ptr CDir -> Ptr (Ptr CDirent) -> IO CInt
 
 foreign import ccall unsafe "__hscore_free_dirent"
-  c_freeDirEnt  :: Ptr CDirent -> IO ()
+  c_freeDirEnt :: Ptr CDirent -> IO ()
+
+foreign import ccall unsafe "__hscore_readdir_r"
+  c_readdir_r :: Ptr CDir -> Ptr CDirent -> Ptr (Ptr CDirent) -> IO CInt
+
+foreign import ccall unsafe "__hscore_sizeof_dirent"
+  c_sizeof_dirent :: CUInt
 
 foreign import ccall unsafe "__hscore_d_name"
   d_name :: Ptr CDirent -> IO CString
@@ -161,21 +164,3 @@ closeDirStream dirp =
 
 foreign import ccall unsafe "closedir"
    c_closedir :: Ptr CDir -> IO CInt
-
-sourceDirectory :: MonadResource m
-                => RawFilePath -> Int -> Bool
-                -> Producer m (RawFilePath, Maybe Bool)
-sourceDirectory dir links hasDtType =
-    bracketP (openDirStream dir) closeDirStream go
-  where
-    go ds = loop links
-      where
-        loop lc = do
-            (fp, isDir) <- liftIO $ readDirStream ds (lc == 0) hasDtType
-            case fp of
-                "" -> return ()
-                _ -> do
-                    yield (dir </> fp, isDir)
-                    loop $ if isDir == Just True && lc >= 0
-                           then lc - 1
-                           else lc

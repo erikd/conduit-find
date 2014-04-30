@@ -2,7 +2,7 @@
 , unixCompat, text, regexPosix, hspec, time, semigroups, exceptions
 , doctest, either, streamingCommons, transformers, filepath, vector
 , posixPaths, monadPar, stm, stmConduit, async, liftedAsync
-, monadLoops
+, monadLoops, parallelIo
 }:
 
 cabal.mkDerivation (self: {
@@ -14,7 +14,7 @@ cabal.mkDerivation (self: {
     unixCompat regexPosix hspec time semigroups exceptions
     doctest either streamingCommons transformers filepath vector
     posixPaths monadPar stm stmConduit async liftedAsync
-    monadLoops
+    monadLoops parallelIo
   ];
   meta = {
     homepage = "https://github.com/yesodweb/Shelly.hs";

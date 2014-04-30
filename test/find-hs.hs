@@ -4,9 +4,8 @@ module Main where
 
 import           Conduit
 import           Control.Monad
-import           Control.Monad.Reader.Class
-import           Data.ByteString hiding (putStrLn)
-import           Data.ByteString.Char8 (putStrLn)
+import           Data.ByteString hiding (putStrLn, pack)
+import           Data.ByteString.Char8 (putStrLn, pack)
 import           Data.Conduit.Filesystem as CF
 import           Data.Conduit.Find
 import qualified Data.List as L
@@ -31,41 +30,27 @@ main = do
 
         "find-conduit" -> do
             putStrLn "Running findFiles from find-conduit"
-            findFiles defaultFindOptions
-                (decodeString dir) $ do
-                    path <- asks entryPath
+            findFiles defaultFindOptions dir $ do
+                    path <- getRawEntryPath
                     guard (".hs" `isSuffixOf` path)
-                    norecurse
                     liftIO $ putStrLn path
 
         "find-conduit-preload" -> do
             putStrLn "Running findFiles from find-conduit"
-            findFiles
-                defaultFindOptions
+            findFiles defaultFindOptions
                     { findPreloadDirectories = True
                     }
-                (decodeString dir) $ do
-                    path <- asks entryPath
+                dir $ do
+                    path <- getRawEntryPath
                     guard (".hs" `isSuffixOf` path)
-                    norecurse
                     liftIO $ putStrLn path
 
         "find-conduit-io" -> do
             putStrLn "Running findFilesIO from find-conduit"
-            findFilesIO
-                defaultFindOptions
-                (encodeUtf8 (T.pack dir)) $ do
-                    path <- asks entryPath
-                    guard (".hs" `isSuffixOf` path)
-                    liftIO $ putStrLn path
-
-        "find-conduit-io-paths" -> do
-            putStrLn "Running findFilePathsIO from find-conduit"
-            findFilePathsIO
-                defaultFindOptions
-                (encodeUtf8 (T.pack dir))
-                (filename_ (".hs" `isSuffixOf`))
-                putStrLn
+            findFilesIO defaultFindOptions dir $ do
+                path <- getRawEntryPath
+                guard (".hs" `isSuffixOf` path)
+                liftIO $ putStrLn path
 
         -- "find-conduit-gather" -> do
         --     putStrLn "Running parFindFiles from find-conduit"
@@ -89,3 +74,5 @@ main = do
         "find" -> do
             putStrLn "Running GNU find"
             executeFile "find" True [dir, "-name", "*.hs", "-print"] Nothing
+
+        _ -> putStrLn $ pack $ "Unknown command: " ++ command

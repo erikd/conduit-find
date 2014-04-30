@@ -123,7 +123,7 @@ statFilePath follow ignoreErrors path = do
 
 -- | Get the current status for the file.  If the status being requested is
 --   already cached in the entry information, simply return it from there.
-getStat :: Maybe Bool -> FileEntry -> IO (Maybe (FileStatus, FileEntry))
+getStat :: Maybe Bool -> FileEntry f -> IO (Maybe (FileStatus, FileEntry f))
 getStat mfollow entry = case entryStatus entry of
     Just s
         | maybe True (== follow entry) mfollow ->

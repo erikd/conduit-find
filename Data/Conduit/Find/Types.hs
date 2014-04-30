@@ -31,7 +31,7 @@ defaultFindOptions = FindOptions
     , findDepthFirst         = True
     }
 
-data FileEntry = FileEntry
+data FileEntry f = FileEntry
     { entryPath        :: !RawFilePath
     , entryDepth       :: !Int
     , entryFindOptions :: !FindOptions
@@ -39,10 +39,10 @@ data FileEntry = FileEntry
       -- ^ This is Nothing until we determine stat should be called.
     }
 
-newFileEntry :: RawFilePath -> Int -> FindOptions -> FileEntry
+newFileEntry :: RawFilePath -> Int -> FindOptions -> FileEntry f
 newFileEntry fp d f = FileEntry fp d f Nothing
 
-instance Show FileEntry where
+instance Show (FileEntry f) where
     show entry = "FileEntry "
         ++ show (entryPath entry) ++ " " ++ show (entryDepth entry)
 
@@ -51,17 +51,37 @@ class IsFilePath a where
     getFilePath    :: a -> FilePath
     getStrFilePath :: a -> FP.FilePath
 
+    fromRawFilePath :: RawFilePath -> a
+    fromFilePath    :: FilePath -> a
+    fromStrFilePath :: FP.FilePath -> a
+    fromTextPath    :: Text -> a
+
 instance IsFilePath ByteString where
     getRawFilePath = id
     getFilePath    = fromText . decodeUtf8
     getStrFilePath = unpack . decodeUtf8
+
+    fromRawFilePath = id
+    fromFilePath    = getRawFilePath
+    fromStrFilePath = getRawFilePath
+    fromTextPath    = encodeUtf8
 
 instance IsFilePath FilePath where
     getRawFilePath = encodeUtf8 . pack . encodeString
     getFilePath    = id
     getStrFilePath = encodeString
 
+    fromRawFilePath = getFilePath
+    fromFilePath    = id
+    fromStrFilePath = getFilePath
+    fromTextPath    = fromText
+
 instance a ~ Char => IsFilePath [a] where
     getRawFilePath = encodeUtf8 . pack
     getFilePath    = decodeString
     getStrFilePath = id
+
+    fromRawFilePath = getStrFilePath
+    fromFilePath    = getStrFilePath
+    fromStrFilePath = id
+    fromTextPath    = unpack

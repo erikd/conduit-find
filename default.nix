@@ -1,18 +1,20 @@
 { cabal, conduit, conduitCombinators, attoparsec, systemFilepath
 , unixCompat, text, regexPosix, hspec, time, semigroups, exceptions
 , doctest, either, streamingCommons, transformers, filepath, vector
-, posixPaths
+, posixPaths, monadPar, stm, stmConduit, async, liftedAsync
+, monadLoops
 }:
 
 cabal.mkDerivation (self: {
   pname = "find-conduit";
-  version = "0.4.1";
+  version = "0.5.0";
   src = ./.;
   buildDepends = [
     conduit conduitCombinators attoparsec systemFilepath text
     unixCompat regexPosix hspec time semigroups exceptions
     doctest either streamingCommons transformers filepath vector
-    posixPaths
+    posixPaths monadPar stm stmConduit async liftedAsync
+    monadLoops
   ];
   meta = {
     homepage = "https://github.com/yesodweb/Shelly.hs";

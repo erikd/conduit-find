@@ -1,5 +1,5 @@
 Name:                find-conduit
-Version:             0.4.1
+Version:             0.5.0
 Synopsis:            A file-finding conduit that allows user control over traversals.
 License-file:        LICENSE
 License:             MIT
@@ -17,14 +17,12 @@ Source-repository head
   location: git://github.com/jwiegley/find-conduit.git
 
 Library
-    default-language:   Haskell98
-    ghc-options: -Wall -O2 -funbox-strict-fields
-    Include-dirs:  .
-    c-sources:	   Helper.c
+    default-language: Haskell98
+    ghc-options:      -Wall -O2 -funbox-strict-fields
+    Include-dirs:     .
+    c-sources:	      Helper.c
     if os(linux)
         cpp-options: -DLEAFOPT=1
-    -- if os(darwin)
-    --     cpp-options: -DSIZEOPT=1
     build-depends:
         base                 >= 3 && < 5
       , conduit
@@ -49,9 +47,13 @@ Library
       , filepath
       , vector
       , posix-paths
+      , monad-par
       , bytestring
     exposed-modules:
-        Data.Cond, Data.Conduit.Find
+        Data.Cond
+        Data.Conduit.Find
+        Data.Conduit.Find.Directory
+        Data.Conduit.Find.Types
 
 -- test-suite test
 --     hs-source-dirs: test
@@ -126,4 +128,5 @@ Executable find-hs
       , filepath
       , vector
       , posix-paths
+      , monad-par
       , bytestring

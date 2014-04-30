@@ -7,7 +7,8 @@ import Control.Monad
 import Control.Monad.Reader.Class
 import Data.Conduit.Find
 import Data.Conduit.Filesystem as CF
-import Data.ByteString
+import Data.ByteString hiding (putStrLn)
+import Data.ByteString.Char8 (putStrLn)
 import qualified Data.List as L
 import Filesystem.Path.CurrentOS
 import System.Environment

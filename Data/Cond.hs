@@ -22,9 +22,6 @@ module Data.Cond
 
     -- * Helper functions
     , recurse, test
-
-    -- * Isomorphism with a stateful EitherT
-    , CondEitherT(..), fromCondT, toCondT
     ) where
 
 import Control.Applicative
@@ -37,7 +34,6 @@ import Control.Monad.Reader.Class
 import Control.Monad.State.Class
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
-import Control.Monad.Trans.Either
 import Control.Monad.Trans.State (StateT(..), withStateT, evalStateT)
 import Data.Foldable
 import Data.Functor.Identity
@@ -473,33 +469,3 @@ recurse c = CondT $ setRecursion c `liftM` getCondT c
 test :: Monad m => a -> CondT a m b -> m Bool
 test = (liftM isJust .) . flip runCondT
 {-# INLINE test #-}
-
--- | This type is for documentation only, and shows the isomorphism between
---   'CondT' and 'CondEitherT'.  The reason for using 'Result' is that it
---   makes meaning of the constructors more explicit.
-newtype CondEitherT a m b = CondEitherT
-    (StateT a (EitherT (Maybe (Maybe (CondEitherT a m b))) m)
-         (b, Maybe (Maybe (CondEitherT a m b))))
-
--- | Witness one half of the isomorphism from 'CondT' to 'CondEitherT'.
-fromCondT :: Monad m => CondT a m b -> CondEitherT a m b
-fromCondT (CondT f) = CondEitherT $ do
-    s <- get
-    (r, s') <- lift $ lift $ runStateT f s
-    case r of
-        Ignore             -> lift $ left Nothing
-        Keep a             -> put s' >> return (a, Nothing)
-        RecurseOnly m      -> lift $ left (Just (fmap fromCondT m))
-        KeepAndRecurse a m -> put s' >> return (a, Just (fmap fromCondT m))
-
--- | Witness the other half of the isomorphism from 'CondEitherT' to 'CondT'.
-toCondT :: Monad m => CondEitherT a m b -> CondT a m b
-toCondT (CondEitherT f) = CondT $ do
-    s <- get
-    eres <- lift $ runEitherT $ runStateT f s
-    case eres of
-        Left Nothing             -> return Ignore
-        Right ((a, Nothing), s') -> put s' >> return (Keep a)
-        Left (Just m)            -> return $ RecurseOnly (fmap toCondT m)
-        Right ((a, Just m), s')  ->
-            put s' >> return (KeepAndRecurse a (fmap toCondT m))

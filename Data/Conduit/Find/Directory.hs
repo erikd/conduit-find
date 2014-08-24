@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
@@ -6,10 +7,12 @@
 
 module Data.Conduit.Find.Directory where
 
-import           Conduit
+import           Conduit.Simple
 import           Control.Applicative
 import           Control.Exception
 import           Control.Monad
+import           Control.Monad.Base
+import           Control.Monad.Trans.Control
 import qualified Data.ByteString as B
 import           Data.Conduit.Find.Types
 import           Data.Maybe (fromMaybe)
@@ -28,7 +31,6 @@ type DirStream = Ptr CDir
 openDirStream :: RawFilePath -> IO DirStream
 openDirStream name = withFilePath name $ \s ->
     throwErrnoPathIfNullRetry "openDirStream" name $ c_opendir s
-{-# INLINE openDirStream #-}
 
 foreign import ccall unsafe "__hsunix_opendir"
    c_opendir :: CString  -> IO (Ptr CDir)
@@ -48,23 +50,21 @@ getDirectoryContentsAndAttrs path = do
             "."  -> readDir acc ds direntp
             ".." -> readDir acc ds direntp
             _    -> readDir (res:acc) ds direntp
-{-# INLINE getDirectoryContentsAndAttrs #-}
 
-sourceDirectory :: MonadResource m
-                => RawFilePath -> Producer m (RawFilePath, CUInt)
-sourceDirectory dir =
-    bracketP (openDirStream dir) closeDirStream go
+sourceDirectory :: MonadBaseControl IO m
+                => RawFilePath -> Source m (RawFilePath, CUInt)
+sourceDirectory dir = source $ \z yield -> do
+    liftBaseOp (bracket (openDirStream dir) closeDirStream) (go z yield)
   where
-    go ds = loop
+    go z yield ds = loop z
       where
-        loop = do
-            res <- liftIO $ readDirStream ds nullPtr
+        loop r = do
+            res <- liftBase $ readDirStream ds nullPtr
             case fst res of
-                ""   -> return ()
-                "."  -> loop
-                ".." -> loop
-                _    -> yield res >> loop
-{-# INLINE sourceDirectory #-}
+                ""   -> return r
+                "."  -> loop r
+                ".." -> loop r
+                _    -> yield r res >>= loop
 
 -- | @readDirStream dp@ calls @readdir@ to obtain the next directory entry
 --   (@struct dirent@) for the open directory stream @dp@, and returns the

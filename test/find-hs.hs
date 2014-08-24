@@ -2,11 +2,11 @@
 
 module Main where
 
-import           Conduit
+import           Conduit.Simple
 import           Control.Monad
+import           Control.Monad.IO.Class
 import           Data.ByteString hiding (putStrLn, pack)
 import           Data.ByteString.Char8 (putStrLn, pack)
-import           Data.Conduit.Filesystem as CF
 import           Data.Conduit.Find
 import qualified Data.List as L
 import qualified Data.Text as T
@@ -21,12 +21,12 @@ main :: IO ()
 main = do
     [command, dir] <- getArgs
     case command of
-        "conduit" -> do
-            putStrLn "Running sourceDirectoryDeep from conduit-extra"
-            runResourceT $
-                CF.sourceDirectoryDeep False dir
-                    =$ filterC (".hs" `L.isSuffixOf`)
-                    $$ mapM_C (liftIO . P.putStrLn)
+        -- "conduit" -> do
+        --     putStrLn "Running sourceDirectoryDeep from conduit-extra"
+        --     runResourceT $
+        --         CF.sourceDirectoryDeep False dir
+        --             =$ filterC (".hs" `L.isSuffixOf`)
+        --             $$ mapM_C (liftIO . P.putStrLn)
 
         "find-conduit" -> do
             putStrLn "Running findFiles from find-conduit"
@@ -65,11 +65,10 @@ main = do
 
         "find-conduit-source" -> do
             putStrLn "Running findFiles from find-conduit"
-            runResourceT $
-                sourceFindFiles defaultFindOptions
-                    (encodeUtf8 (T.pack dir)) (return ())
-                    =$ filterC ((".hs" `isSuffixOf`) . entryPath . fst)
-                    $$ mapM_C (liftIO . putStrLn . entryPath . fst)
+            sourceFindFiles defaultFindOptions
+                (encodeUtf8 (T.pack dir)) (return ())
+                $= filterC ((".hs" `isSuffixOf`) . entryPath . fst)
+                $$ mapM_C (liftIO . putStrLn . entryPath . fst)
 
         "find" -> do
             putStrLn "Running GNU find"

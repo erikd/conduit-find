@@ -29,7 +29,7 @@ Library
         base                 >= 3 && < 5
       , attoparsec
       , bytestring
-      , conduit-combinators
+      , simple-conduit
       , either
       , exceptions
       , filepath
@@ -60,7 +60,7 @@ test-suite test
     ghc-options: -Wall -threaded
     build-depends:
         base
-      , conduit-combinators
+      , simple-conduit
       , find-conduit
       , hspec                >= 1.4
 
@@ -85,9 +85,9 @@ Executable find-hs
         base
       , find-conduit
       , bytestring
-      , conduit-combinators
-      , conduit-extra
+      , simple-conduit
       , mtl
       , system-filepath
+      , transformers
       , text                 >= 0.11.3.1
       , unix                 >= 0.4.1.1

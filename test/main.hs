@@ -2,7 +2,7 @@
 
 module Main where
 
-import Conduit
+import Conduit.Simple
 import Data.Conduit.Find
 import Test.Hspec
 
@@ -22,8 +22,7 @@ main = hspec $ do
             res `shouldBe` False
 
         it "finds files" $ do
-            xs <- runResourceT $
-                find "."
+            xs <- find "."
                     (do ignoreVcs
                         when_ (name_ "dist") prune
                         glob "*.hs"
@@ -38,8 +37,7 @@ main = hspec $ do
             "./.git/config" `elem` xs `shouldBe` False
 
         it "finds files with a different ordering" $ do
-            xs <- runResourceT $
-                find "."
+            xs <- find "."
                     (do ignoreVcs
                         glob "*.hs"
                         not_ (glob "Setup*")
@@ -57,8 +55,7 @@ main = hspec $ do
             "./.git/config" `elem` xs `shouldBe` False
 
         it "finds files using a pre-pass filter" $ do
-            xs <- runResourceT $
-                find "."
+            xs <- find "."
                     (do ignoreVcs
                         when_ (name_ "dist") prune
                         glob "*.hs"
@@ -73,8 +70,7 @@ main = hspec $ do
             "./.git/config" `elem` xs `shouldBe` False
 
         it "properly applies post-pass pruning" $ do
-            xs <- runResourceT $
-                find "."
+            xs <- find "."
                     (do ignoreVcs
                         maxdepth_ 1
                         when_ (name_ "dist") prune

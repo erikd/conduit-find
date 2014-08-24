@@ -83,11 +83,15 @@ module Data.Conduit.Find
     , genericLtest
     ) where
 
-import           Conduit hiding (sourceDirectory)
+import           Conduit.Simple hiding (sourceDirectory)
 import           Control.Applicative
 import           Control.Monad
+import           Control.Monad.Base
 import           Control.Monad.Morph
+import           Control.Monad.IO.Class
 import           Control.Monad.State.Class
+import           Control.Monad.Trans.Control
+import           Control.Monad.Trans.Either
 import           Data.Attoparsec.Text as A
 import           Data.Bits
 import qualified Data.ByteString as B
@@ -412,65 +416,72 @@ glob g = case parseOnly globParser (pack g) of
 --   recursion predicate to the search.  This conduit yields pairs of type
 --   @(FileEntry f, a)@, where is the return value from the predicate at each
 --   step.
-sourceFindFiles :: (MonadIO m, MonadResource m, IsFilePath f)
+sourceFindFiles :: (MonadBaseControl IO m, IsFilePath f)
                 => FindOptions
                 -> f
                 -> CondT (FileEntry f) m a
-                -> Producer m (FileEntry f, a)
-sourceFindFiles findOptions startPath =
-    walkChildren (newFileEntry (getRawFilePath startPath) 0 findOptions)
-{-# INLINE sourceFindFiles #-}
+                -> Source m (FileEntry f, a)
+sourceFindFiles findOptions startPath c = source $
+    walkChildren (newFileEntry (getRawFilePath startPath) 0 findOptions) c
 
-walkChildren :: MonadResource m
+walkChildren :: MonadBaseControl IO m
              => FileEntry f
              -> CondT (FileEntry f) m a
-             -> Producer m (FileEntry f, a)
-walkChildren !entry !cond = do
+             -> r
+             -> (r -> (FileEntry f, a) -> EitherT r m r)
+             -> EitherT r m r
+walkChildren !entry !cond r yield = do
     let !path      = B.snoc (entryPath entry) sep
         !opts      = entryFindOptions entry
         !nextDepth = succ (entryDepth entry)
-        !worker    = uncurry $ handleEntry opts path nextDepth cond
+        !worker    = handleEntry opts path nextDepth cond
     if findPreloadDirectories opts
         then do
-            !fps <- liftIO $ getDirectoryContentsAndAttrs path
-            forM_ fps $ mapInput undefined (const Nothing) . worker
+            !fps <- liftBase $ getDirectoryContentsAndAttrs path
+            foldM (\r' (p, i) -> worker r' yield p i) r fps
         else
-            sourceDirectory path =$= awaitForever worker
+            runSource (sourceDirectory path) r $ \r' (p,i) ->
+                worker r' yield p i
 
-handleEntry :: MonadResource m
+handleEntry :: MonadBaseControl IO m
             => FindOptions
             -> RawFilePath
             -> Int
             -> CondT (FileEntry f) m a
+            -> r
+            -> (r -> (FileEntry f, a) -> EitherT r m r)
             -> RawFilePath
             -> CUInt
-            -> Producer m (FileEntry f, a)
-handleEntry opts path nextDepth cond !fp !typ = do
+            -> EitherT r m r
+handleEntry opts path nextDepth cond r yield !fp !typ = do
     let childPath = B.append path fp
         child     = newFileEntry childPath nextDepth opts
 
     ((!mres, !mcond), !child') <- lift $ applyCondT child cond
 
     let opts' = entryFindOptions child'
-        this = case mres of
-            Nothing -> return ()
+        this r' = case mres of
+            Nothing -> return r'
             Just res
-                | findIgnoreResults opts' -> return ()
-                | otherwise -> yield (child', res)
-        next = case mcond of
-            Nothing -> return ()
+                | findIgnoreResults opts' -> return r'
+                | otherwise -> yield r' (child', res)
+        next r' = case mcond of
+            Nothing -> return r'
             Just !cond'
                 | typ == 10 ->
-                    when (findFollowSymlinks opts) $ do
-                        isDir <- liftIO $ statIsDirectory childPath
-                        when isDir $ walkChildren child' cond'
-                | typ == 4  -> walkChildren child' cond'
-                | otherwise -> return ()
+                    if findFollowSymlinks opts
+                    then do
+                        isDir <- liftBase $ statIsDirectory childPath
+                        if isDir
+                            then walkChildren child' cond' r' yield
+                            else return r'
+                    else return r'
+                | typ == 4  -> walkChildren child' cond' r' yield
+                | otherwise -> return r'
 
     if findContentsFirst opts'
-        then next >> this
-        else this >> next
-{-# INLINE handleEntry #-}
+        then next r >>= this
+        else this r >>= next
 
 -- | Find file entries in a directory tree, recursively, applying the given
 --   recursion predicate to the search.  This conduit yields pairs of type
@@ -526,39 +537,33 @@ handleEntryIO opts path cond nextDepth f (!fp, !typ) = do
                 else f Nothing
             | typ == 4  -> f (Just (child', cond'))
             | otherwise -> f Nothing
-{-# INLINE handleEntryIO #-}
 
 genericFindFiles
-    :: (MonadIO m, MonadBaseControl IO m, MonadThrow m, IsFilePath f)
+    :: (MonadBaseControl IO m, IsFilePath f)
     => FindOptions
     -> f
     -> CondT (FileEntry f) m a
     -> m ()
 genericFindFiles opts path predicate =
-    runResourceT $
-        sourceFindFiles opts { findIgnoreResults = True } path
-            (hoist lift predicate) $$ sinkNull
-{-# INLINE genericFindFiles #-}
+    sourceFindFiles opts { findIgnoreResults = True } path predicate $$ sinkNull
 
 -- | A simpler version of 'findFiles', which yields only 'FilePath' values,
 --   and ignores any values returned by the predicate action.
 genericFindFilePaths
-    :: (MonadIO m, MonadResource m, IsFilePath f)
+    :: (MonadBaseControl IO m, IsFilePath f)
     => FindOptions
     -> f
     -> CondT (FileEntry f) m a
-    -> Producer m f
+    -> Source m f
 genericFindFilePaths opts path predicate =
     sourceFindFiles opts path predicate
-        =$= mapC (fromRawFilePath . entryPath . fst)
-{-# INLINE genericFindFilePaths #-}
+        $= mapC (fromRawFilePath . entryPath . fst)
 
 -- | Calls 'findFilePaths' with the default set of finding options.
 --   Equivalent to @findFilePaths defaultFindOptions@.
-genericFind :: (MonadIO m, MonadResource m, IsFilePath f)
-            => f -> CondT (FileEntry f) m a -> Producer m f
+genericFind :: (MonadBaseControl IO m, IsFilePath f)
+            => f -> CondT (FileEntry f) m a -> Source m f
 genericFind = genericFindFilePaths defaultFindOptions
-{-# INLINE genericFind #-}
 
 -- | Test a file path using the same type of predicate that is accepted by
 --   'findFiles'.
@@ -578,32 +583,28 @@ genericLtest matcher path =
     Cond.test
         (newFileEntry (getRawFilePath path) 0 defaultFindOptions)
         matcher
-{-# INLINE genericLtest #-}
 
-findFiles :: (MonadIO m, MonadBaseControl IO m, MonadThrow m)
+findFiles :: MonadBaseControl IO m
           => FindOptions
           -> FilePath
           -> CondT (FileEntry FilePath) m a
           -> m ()
 findFiles = genericFindFiles
-{-# INLINE findFiles #-}
 
 -- | A simpler version of 'findFiles', which yields only 'FilePath' values,
 --   and ignores any values returned by the predicate action.
-findFilePaths :: (MonadIO m, MonadResource m)
+findFilePaths :: MonadBaseControl IO m
               => FindOptions
               -> FilePath
               -> CondT (FileEntry FilePath) m a
-              -> Producer m FilePath
+              -> Source m FilePath
 findFilePaths = genericFindFilePaths
-{-# INLINE findFilePaths #-}
 
 -- | Calls 'findFilePaths' with the default set of finding options.
 --   Equivalent to @findFilePaths defaultFindOptions@.
-find :: (MonadIO m, MonadResource m)
-     => FilePath -> CondT (FileEntry FilePath) m a -> Producer m FilePath
+find :: MonadBaseControl IO m
+     => FilePath -> CondT (FileEntry FilePath) m a -> Source m FilePath
 find = genericFind
-{-# INLINE find #-}
 
 -- | Test a file path using the same type of predicate that is accepted by
 --   'findFiles'.

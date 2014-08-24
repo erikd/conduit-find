@@ -103,12 +103,10 @@ readDirStream dirp direntp = alloca loop
         -- sub-directories, the remaining entries must be files.
         !typ <- d_type dEnt
         return (entry, typ)
-{-# INLINE readDirStream #-}
 
 statIsDirectory :: RawFilePath -> IO Bool
 statIsDirectory path =
     maybe False isDirectory <$> statFilePath True True path
-{-# INLINE statIsDirectory #-}
 
 statFilePath :: Bool -> Bool -> RawFilePath -> IO (Maybe FileStatus)
 statFilePath follow ignoreErrors path = do
@@ -119,7 +117,6 @@ statFilePath follow ignoreErrors path = do
         if ignoreErrors
         then return Nothing
         else throwIO (e :: IOException)
-{-# INLINE statFilePath #-}
 
 -- | Get the current status for the file.  If the status being requested is
 --   already cached in the entry information, simply return it from there.
@@ -143,7 +140,6 @@ getStat mfollow entry = case entryStatus entry of
         (entryPath entry)
       where
         opts = entryFindOptions entry
-{-# INLINE getStat #-}
 
 -- traversing directories
 foreign import ccall unsafe "__hscore_readdir"
@@ -171,7 +167,6 @@ foreign import ccall unsafe "__hscore_d_type"
 closeDirStream :: DirStream -> IO ()
 closeDirStream dirp =
   throwErrnoIfMinus1Retry_ "closeDirStream" (c_closedir dirp)
-{-# INLINE closeDirStream #-}
 
 foreign import ccall unsafe "closedir"
    c_closedir :: Ptr CDir -> IO CInt

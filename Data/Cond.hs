@@ -244,6 +244,8 @@ instance MonadThrow m => MonadThrow (CondT a m) where
 
 instance MonadCatch m => MonadCatch (CondT a m) where
     catch (CondT m) c = CondT $ m `catch` \e -> getCondT (c e)
+
+instance MonadMask m => MonadMask (CondT a m) where
     mask a = CondT $ mask $ \u -> getCondT (a $ q u)
       where q u = CondT . u . getCondT
     uninterruptibleMask a =

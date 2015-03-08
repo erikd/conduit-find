@@ -33,7 +33,7 @@ Library
       , regex-posix
       , mtl
       , semigroups
-      , exceptions
+      , exceptions           >= 0.6
       , time
       , streaming-commons
       , transformers

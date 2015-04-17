@@ -11,7 +11,6 @@ main :: IO ()
 main = getSources >>= \sources -> doctest $
     "-iData"
   : "-idist/build/autogen"
-  : "-package=semigroups-0.13.0.1"
   : "-optP-include"
   : "-optPdist/build/autogen/cabal_macros.h"
   : sources

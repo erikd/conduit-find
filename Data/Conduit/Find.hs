@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Data.Conduit.Find
     (
@@ -88,7 +89,7 @@ import qualified Data.Conduit.Filesystem as CF
 #if LEAFOPT
 import           Data.IORef
 #endif
-import           Data.Maybe (fromMaybe)
+import           Data.Maybe (fromMaybe,fromJust)
 import           Data.Monoid
 import           Data.Text (Text, unpack, pack)
 import           Data.Time
@@ -460,12 +461,12 @@ glob g = case parseOnly globParser (pack g) of
                 <*> char ']'
         <|> do
             x <- anyChar
-            return . pack $ if x `elem` ".()^$"
+            return . pack $ if x `elem` (".()^$" :: String)
                             then ['\\', x]
                             else [x]
 
 #if LEAFOPT
-type DirCounter = IORef Int
+type DirCounter = IORef LinkCount
 
 newDirCounter :: MonadIO m => m DirCounter
 newDirCounter = liftIO $ newIORef 1
@@ -527,7 +528,8 @@ sourceFindFiles findOptions startPath predicate = do
             -- Update directory count for the parent directory.
             liftIO $ modifyIORef dc pred
             -- Track the directory count for this child path.
-            let lc = linkCount st - 2
+            let leafOpt = findLeafOptimization (entryFindOptions entry)
+            let lc = linkCount (fromJust st) - 2
                 opts' = (entryFindOptions entry)
                     { findLeafOptimization = leafOpt && lc >= 0
                     }

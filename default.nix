@@ -1,27 +1,24 @@
-{ cabal, conduit, conduitCombinators, attoparsec, systemFilepath
-, unixCompat, text, regexPosix, hspec, time, semigroups, exceptions
-, doctest, either, streamingCommons, transformers, filepath, vector
-, posixPaths, monadPar, stm, stmConduit, async, liftedAsync
-, monadLoops, parallelIo, simpleConduitHEAD
+{ mkDerivation, attoparsec, base, bytestring, directory, doctest
+, either, exceptions, filepath, hspec, mmorph, monad-control, mtl
+, posix-paths, regex-posix, semigroups, simple-conduit, stdenv
+, system-filepath, text, time, transformers, transformers-base
+, unix, unix-compat
 }:
-
-cabal.mkDerivation (self: {
+mkDerivation {
   pname = "find-conduit";
   version = "0.5.0";
   src = ./.;
+  isLibrary = true;
+  isExecutable = true;
   buildDepends = [
-    conduit conduitCombinators attoparsec systemFilepath text
-    unixCompat regexPosix hspec time semigroups exceptions
-    doctest either streamingCommons transformers filepath vector
-    posixPaths monadPar stm stmConduit async liftedAsync
-    monadLoops parallelIo simpleConduitHEAD
+    attoparsec base bytestring either exceptions filepath mmorph
+    monad-control mtl posix-paths regex-posix semigroups simple-conduit
+    system-filepath text time transformers transformers-base unix
+    unix-compat
   ];
-  testDepends = [ semigroups ];
-  meta = {
-    homepage = "https://github.com/yesodweb/Shelly.hs";
-    description = "shell-like (systems) programming in Haskell";
-    license = self.stdenv.lib.licenses.bsd3;
-    platforms = self.ghc.meta.platforms;
-    maintainers = [ self.stdenv.lib.maintainers.andres ];
-  };
-})
+  testDepends = [
+    base directory doctest filepath hspec semigroups simple-conduit
+  ];
+  description = "A file-finding conduit that allows user control over traversals";
+  license = stdenv.lib.licenses.mit;
+}

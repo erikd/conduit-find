@@ -282,7 +282,6 @@ instance MonadBaseControl b m => MonadBaseControl b (CondT r m) where
         CondTStM { unCondTStM :: StM m (Result r m a, r) }
     liftBaseWith f = CondT $ StateT $ \s ->
         liftM (\x -> (accept' x, s)) $ liftBaseWith $ \runInBase -> f $ \k ->
-            runInBase $ runStateT (getCondT k) s
             liftM CondTStM $ runInBase $ runStateT (getCondT k) s
     restoreM = CondT . StateT . const . restoreM . unCondTStM
     {-# INLINE liftBaseWith #-}

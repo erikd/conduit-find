@@ -1,3 +1,5 @@
+{-#LANGUAGE CPP#-}
+
 module Main where
 
 import Conduit
@@ -16,10 +18,15 @@ main = do
         "conduit" -> do
             putStrLn "Running sourceDirectoryDeep from conduit-extra"
             runResourceT $
-                sourceDirectoryDeep False (decodeString dir)
+#if MIN_VERSION_conduit_combinators(1,0,0)
+              sourceDirectoryDeep False dir
+                    =$ filterC (".hs" `isSuffixOf`)
+                    $$ mapM_C (liftIO . putStrLn)
+#else
+              sourceDirectoryDeep False (decodeString dir)
                     =$ filterC ((".hs" `isSuffixOf`) . encodeString)
                     $$ mapM_C (liftIO . putStrLn . encodeString)
-
+#endif
         "find-conduit" -> do
             putStrLn "Running findFiles from find-conduit"
             findFiles defaultFindOptions { findFollowSymlinks = False }

@@ -5,7 +5,6 @@ import Control.Monad
 import Control.Monad.Reader.Class
 import Data.Conduit.Find
 import Data.List
-import Filesystem.Path.CurrentOS
 import System.Environment
 import System.Posix.Process
 
@@ -16,14 +15,14 @@ main = do
         "conduit" -> do
             putStrLn "Running sourceDirectoryDeep from conduit-extra"
             runResourceT $
-                sourceDirectoryDeep False (decodeString dir)
-                    =$ filterC ((".hs" `isSuffixOf`) . encodeString)
-                    $$ mapM_C (liftIO . putStrLn . encodeString)
+                sourceDirectoryDeep False dir
+                    =$ filterC (".hs" `isSuffixOf`)
+                    $$ mapM_C (liftIO . putStrLn)
 
         "find-conduit" -> do
             putStrLn "Running findFiles from find-conduit"
             findFiles defaultFindOptions { findFollowSymlinks = False }
-                (decodeString dir) $ do
+                dir $ do
                     path <- asks entryPath
                     guard (".hs" `isSuffixOf` path)
                     norecurse
@@ -33,7 +32,7 @@ main = do
             putStrLn "Running findFiles from find-conduit"
             runResourceT $
                 sourceFindFiles defaultFindOptions { findFollowSymlinks = False }
-                    (decodeString dir) (return ())
+                    dir (return ())
                     =$ filterC ((".hs" `isSuffixOf`) . entryPath . fst)
                     $$ mapM_C (liftIO . putStrLn . entryPath . fst)
 

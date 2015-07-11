@@ -94,9 +94,6 @@ import           Data.Monoid
 import           Data.Text (Text, unpack, pack)
 import           Data.Time
 import           Data.Time.Clock.POSIX
-import           Filesystem.Path.CurrentOS (FilePath,
-                                            encodeString, decodeString)
-import           Prelude hiding (FilePath)
 import qualified System.FilePath as FP
 import           System.PosixCompat.Files
 import           System.PosixCompat.Types
@@ -489,8 +486,8 @@ sourceFindFiles :: (MonadIO m, MonadResource m)
 sourceFindFiles findOptions startPath predicate = do
     startDc <- newDirCounter
     walk startDc
-        (newFileEntry (encodeString startPath) 0 findOptions)
-        (encodeString startPath)
+        (newFileEntry startPath 0 findOptions)
+        startPath
         predicate
   where
     walk :: MonadResource m
@@ -589,8 +586,7 @@ findFilePaths :: (MonadIO m, MonadResource m)
               -> CondT FileEntry m a
               -> Producer m FilePath
 findFilePaths opts path predicate =
-    mapOutput decodeString $
-        sourceFindFiles opts path predicate =$= mapC (entryPath . fst)
+    sourceFindFiles opts path predicate =$= mapC (entryPath . fst)
 
 -- | Calls 'findFilePaths' with the default set of finding options.
 --   Equivalent to @findFilePaths defaultFindOptions@.
@@ -602,13 +598,13 @@ find = findFilePaths defaultFindOptions
 --   'findFiles'.
 test :: MonadIO m => CondT FileEntry m () -> FilePath -> m Bool
 test matcher path =
-    Cond.test (newFileEntry (encodeString path) 0 defaultFindOptions) matcher
+    Cond.test (newFileEntry path 0 defaultFindOptions) matcher
 
 -- | Test a file path using the same type of predicate that is accepted by
 --   'findFiles', but do not follow symlinks.
 ltest :: MonadIO m => CondT FileEntry m () -> FilePath -> m Bool
 ltest matcher path =
     Cond.test
-        (newFileEntry (encodeString path) 0 defaultFindOptions
+        (newFileEntry path 0 defaultFindOptions
             { findFollowSymlinks = False })
         matcher

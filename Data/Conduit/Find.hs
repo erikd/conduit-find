@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Data.Conduit.Find
     (
@@ -404,7 +405,7 @@ glob g = case parseOnly globParser (pack g) of
                 <*> char ']'
         <|> do
             x <- anyChar
-            return . pack $ if x `elem` ".()^$"
+            return . pack $ if x `elem` (".()^$" :: String)
                             then ['\\', x]
                             else [x]
 

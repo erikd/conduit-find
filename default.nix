@@ -1,8 +1,8 @@
-{ cabal, conduit, conduitCombinators, attoparsec, systemFilepath
-, unixCompat, text, regexPosix, hspec, time, semigroups, exceptions
-, doctest, either, streamingCommons, transformers, filepath, vector
-, posixPaths, monadPar, stm, stmConduit, async, liftedAsync
-, monadLoops, parallelIo
+{ mkDerivation, attoparsec, base, bytestring, conduit-combinators
+, conduit-extra, directory, doctest, either, exceptions, filepath
+, hspec, mmorph, monad-control, mtl, posix-paths, regex-posix
+, semigroups, stdenv, system-filepath, text, time, transformers
+, transformers-base, unix, unix-compat
 }:
 mkDerivation {
   pname = "find-conduit";
@@ -11,17 +11,14 @@ mkDerivation {
   isLibrary = true;
   isExecutable = true;
   buildDepends = [
-    conduit conduitCombinators attoparsec systemFilepath text
-    unixCompat regexPosix hspec time semigroups exceptions
-    doctest either streamingCommons transformers filepath vector
-    posixPaths monadPar stm stmConduit async liftedAsync
-    monadLoops parallelIo
+    attoparsec base bytestring conduit-combinators conduit-extra either
+    exceptions filepath mmorph monad-control mtl posix-paths
+    regex-posix semigroups system-filepath text time transformers
+    transformers-base unix unix-compat
   ];
   testDepends = [
-    attoparsec base conduit conduit-combinators directory doctest
-    either exceptions filepath hspec mmorph monad-control mtl
-    regex-posix semigroups streaming-commons text time transformers
-    transformers-base unix-compat
+    base conduit-combinators directory doctest filepath hspec
+    semigroups
   ];
   description = "A file-finding conduit that allows user control over traversals";
   license = stdenv.lib.licenses.mit;

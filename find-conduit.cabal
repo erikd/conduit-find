@@ -70,18 +70,6 @@ test-suite test
       , find-conduit
       , hspec                >= 1.4
 
-Test-suite doctests
-    Default-language: Haskell98
-    Type:    exitcode-stdio-1.0
-    Main-is: doctest.hs
-    Hs-source-dirs: test
-    Build-depends:      
-        base
-      , directory    >= 1.0
-      , doctest      >= 0.8
-      , filepath     >= 1.3
-      , semigroups   >= 0.4
-
 Executable find-hs
     default-language: Haskell2010
     Main-is:          find-hs.hs

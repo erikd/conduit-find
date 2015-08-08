@@ -1,12 +1,16 @@
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Data.Cond
+{-
     ( CondT(..), Cond
 
     -- * Executing CondT
@@ -23,7 +27,9 @@ module Data.Cond
 
     -- * Helper functions
     , recurse, test
-    ) where
+    )
+-}
+    where
 
 import Control.Applicative
 import Control.Arrow (first)
@@ -43,91 +49,9 @@ import Data.Monoid hiding ((<>))
 import Data.Semigroup
 import Prelude hiding (mapM_, foldr1, sequence_)
 
--- | 'Result' is an enriched 'Maybe' type which also specifies whether
---   recursion should occur from the given input, and if so, how such
---   recursion should be performed.
-data Result a m b = Ignore
-                  | Keep b
-                  | RecurseOnly (Maybe (CondT a m b))
-                  | KeepAndRecurse b (Maybe (CondT a m b))
-
-instance Show b => Show (Result a m b) where
-    show Ignore               = "Ignore"
-    show (Keep a)             = "Keep " ++ show a
-    show (RecurseOnly _)      = "RecurseOnly"
-    show (KeepAndRecurse a _) = "KeepAndRecurse " ++ show a
-
-instance Monad m => Functor (Result a m) where
-    fmap _ Ignore               = Ignore
-    fmap f (Keep a)             = Keep (f a)
-    fmap f (RecurseOnly l)      = RecurseOnly (liftM (fmap f) l)
-    fmap f (KeepAndRecurse a l) = KeepAndRecurse (f a) (liftM (fmap f) l)
-    {-# INLINE fmap #-}
-
-instance MFunctor (Result a) where
-    hoist _ Ignore                 = Ignore
-    hoist _ (Keep a)               = Keep a
-    hoist nat (RecurseOnly l)      = RecurseOnly (fmap (hoist nat) l)
-    hoist nat (KeepAndRecurse a l) = KeepAndRecurse a (fmap (hoist nat) l)
-    {-# INLINE hoist #-}
-
-instance Semigroup (Result a m b) where
-    Ignore        <> _                  = Ignore
-    _             <> Ignore             = Ignore
-    RecurseOnly _ <> Keep _             = Ignore
-    RecurseOnly _ <> KeepAndRecurse _ m = RecurseOnly m
-    RecurseOnly m <> _                  = RecurseOnly m
-    Keep _        <> RecurseOnly _      = Ignore
-    _             <> RecurseOnly m      = RecurseOnly m
-    _             <> Keep b             = Keep b
-    Keep _        <> KeepAndRecurse b _ = Keep b
-    _             <> KeepAndRecurse b m = KeepAndRecurse b m
-    {-# INLINE (<>) #-}
-
-instance Monoid b => Monoid (Result a m b) where
-    mempty  = KeepAndRecurse mempty Nothing
-    {-# INLINE mempty #-}
-    mappend = (<>)
-    {-# INLINE mappend #-}
-
-getResult :: Result a m b -> (Maybe b, Maybe (CondT a m b))
-getResult Ignore               = (Nothing, Nothing)
-getResult (Keep b)             = (Just b, Nothing)
-getResult (RecurseOnly c)      = (Nothing, c)
-getResult (KeepAndRecurse b c) = (Just b, c)
-
-setRecursion :: CondT a m b -> Result a m b -> Result a m b
-setRecursion _ Ignore               = Ignore
-setRecursion _ (Keep b)             = Keep b
-setRecursion c (RecurseOnly _)      = RecurseOnly (Just c)
-setRecursion c (KeepAndRecurse b _) = KeepAndRecurse b (Just c)
-
-accept' :: b -> Result a m b
-accept' = flip KeepAndRecurse Nothing
-
-recurse' :: Result a m b
-recurse' = RecurseOnly Nothing
-
--- | Convert from a 'Maybe' value to its corresponding 'Result'.
---
--- >>> maybeToResult Nothing :: Result () Identity ()
--- RecurseOnly
--- >>> maybeToResult (Just ()) :: Result () Identity ()
--- KeepAndRecurse ()
-maybeToResult :: Monad m => Maybe a -> Result r m a
-maybeToResult Nothing  = recurse'
-maybeToResult (Just a) = accept' a
-
-maybeFromResult :: Monad m => Result r m a -> Maybe a
-maybeFromResult Ignore               = Nothing
-maybeFromResult (Keep a)             = Just a
-maybeFromResult (RecurseOnly _)      = Nothing
-maybeFromResult (KeepAndRecurse a _) = Just a
-
--- | 'CondT' is a kind of @StateT a (MaybeT m) b@, which uses a special
---   'Result' type instead of 'Maybe' to express whether recursion should be
---   performed from the item under consideration.  This is used to build
---   predicates that can guide recursive traversals.
+-- | 'CondT' expresses whether recursion should be performed from the item
+--   under consideration. This is used to build predicates that can guide
+--   recursive traversals.
 --
 -- Several different types may be promoted to 'CondT':
 --
@@ -153,16 +77,15 @@ maybeFromResult (KeepAndRecurse a _) = Just a
 --   guard_ (== 42)
 -- @
 --
--- If 'CondT' is executed using 'runCondT', it return a @Maybe b@ if the
--- predicate matched.  It can also be run with 'applyCondT', which does case
--- analysis on the 'Result', specifying how recursion should be performed from
--- the given 'a' value.
-newtype CondT a m b = CondT { getCondT :: StateT a m (Result a m b) }
+-- If 'CondT' is executed using 'runCondT', it returns a @Maybe b@ if the
+-- predicate matched. It may also be run with 'applyCondT', which determines
+-- if recursion should be performed.
+type CondR a m b = (Maybe b, Maybe (CondT a m b))
+
+newtype CondT a m b = CondT { getCondT :: StateT a m (CondR a m b) }
+    deriving Functor
 
 type Cond a = CondT a Identity
-
-instance Show (CondT a m b) where
-    show _ = "CondT"
 
 instance (Monad m, Semigroup b) => Semigroup (CondT a m b) where
     (<>) = liftM2 (<>)
@@ -174,33 +97,31 @@ instance (Monad m, Monoid b) => Monoid (CondT a m b) where
     mappend = liftM2 mappend
     {-# INLINE mappend #-}
 
-instance Monad m => Functor (CondT a m) where
-    fmap f (CondT g) = CondT (liftM (fmap f) g)
-    {-# INLINE fmap #-}
-
 instance Monad m => Applicative (CondT a m) where
     pure  = return
     {-# INLINE pure #-}
     (<*>) = ap
     {-# INLINE (<*>) #-}
 
+accept' :: b -> CondR a m b
+accept' x = (Just x, Nothing)
+
+recurse' :: Monad m => CondR a m b
+recurse' = (Nothing, Just (CondT $ return recurse'))
+
+maybeToResult :: Monad m => Maybe b -> CondR a m b
+maybeToResult Nothing  = recurse'
+maybeToResult (Just b) = accept' b
+
 instance Monad m => Monad (CondT a m) where
     return = CondT . return . accept'
     {-# INLINE return #-}
     fail _ = mzero
     {-# INLINE fail #-}
-    CondT f >>= k = CondT $ do
-        r <- f
-        case r of
-            Ignore -> return Ignore
-            Keep b -> do
-                n <- getCondT (k b)
-                return $ case n of
-                    RecurseOnly _      -> Ignore
-                    KeepAndRecurse c _ -> Keep c
-                    _                  -> n
-            RecurseOnly l -> return $ RecurseOnly (fmap (>>= k) l)
-            KeepAndRecurse b _ -> getCondT (k b)
+    CondT m >>= k = CondT $ m >>= \case
+        (Nothing, l)       -> return (Nothing, fmap (>>= k) l)
+        (Just b,  Nothing) -> fmap (const Nothing) `liftM` getCondT (k b)
+        (Just b,  Just _)  -> getCondT (k b)
 
 instance Monad m => MonadReader a (CondT a m) where
     ask               = CondT $ gets accept'
@@ -224,8 +145,7 @@ instance Monad m => Alternative (CondT a m) where
     CondT f <|> CondT g = CondT $ do
         r <- f
         case r of
-            x@(Keep _) -> return x
-            x@(KeepAndRecurse _ _) -> return x
+            x@(Just _, _) -> return x
             _ -> g
     {-# INLINE (<|>) #-}
 
@@ -263,33 +183,33 @@ instance MonadTrans (CondT a) where
     lift m = CondT $ liftM accept' $ lift m
     {-# INLINE lift #-}
 
-#if MIN_VERSION_monad_control(1,0,0)
+-- #if MIN_VERSION_monad_control(1,0,0)
 instance MonadBaseControl b m => MonadBaseControl b (CondT r m) where
-    type StM (CondT r m) a = StM m (Result r m a, r)
+    type StM (CondT r m) a = StM m (CondR r m a, r)
     liftBaseWith f = CondT $ StateT $ \s ->
-        liftM (\x -> (accept' x, s)) $ liftBaseWith $ \runInBase -> f $ \k ->
-            runInBase $ runStateT (getCondT k) s
+        liftM (\x -> (accept' x, s)) $ liftBaseWith $ \runInBase ->
+            f $ \k -> runInBase $ runStateT (getCondT k) s
     restoreM = CondT . StateT . const . restoreM
     {-# INLINE liftBaseWith #-}
     {-# INLINE restoreM #-}
-#else
-instance MonadBaseControl b m => MonadBaseControl b (CondT r m) where
-    newtype StM (CondT r m) a =
-        CondTStM { unCondTStM :: StM m (Result r m a, r) }
-    liftBaseWith f = CondT $ StateT $ \s ->
-        liftM (\x -> (accept' x, s)) $ liftBaseWith $ \runInBase -> f $ \k ->
-            liftM CondTStM $ runInBase $ runStateT (getCondT k) s
-    restoreM = CondT . StateT . const . restoreM . unCondTStM
-    {-# INLINE liftBaseWith #-}
-    {-# INLINE restoreM #-}
-#endif
+-- #else
+-- instance MonadBaseControl b m => MonadBaseControl b (CondT r m) where
+--     newtype StM (CondT r m) a =
+--         CondTStM { unCondTStM :: StM m (Result r m a, r) }
+--     liftBaseWith f = CondT $ StateT $ \s ->
+--         liftM (\x -> (accept' x, s)) $ liftBaseWith $ \runInBase -> f $ \k ->
+--             liftM CondTStM $ runInBase $ runStateT (getCondT k) s
+--     restoreM = CondT . StateT . const . restoreM . unCondTStM
+--     {-# INLINE liftBaseWith #-}
+--     {-# INLINE restoreM #-}
+-- #endif
 
 instance MFunctor (CondT a) where
-    hoist nat (CondT m) = CondT $ hoist nat (liftM (hoist nat) m)
+    hoist nat (CondT m) = CondT $ hoist nat (fmap (fmap (fmap (hoist nat))) m)
     {-# INLINE hoist #-}
 
 runCondT :: Monad m => CondT a m b -> a -> m (Maybe b)
-runCondT (CondT f) a = maybeFromResult `liftM` evalStateT f a
+runCondT (CondT f) a = fst `liftM` evalStateT f a
 {-# INLINE runCondT #-}
 
 runCond :: Cond a b -> a -> Maybe b
@@ -300,10 +220,7 @@ runCond = (runIdentity .) . runCondT
 --   pair whose first part is a pair of Maybes specifying if the input matched
 --   and if recursion is expected from this value, and whose second part is
 --   the (possibly) mutated input value.
-applyCondT :: Monad m
-           => a
-           -> CondT a m b
-           -> m ((Maybe b, Maybe (CondT a m b)), a)
+applyCondT :: Monad m => a -> CondT a m b -> m (CondR a m b, a)
 applyCondT a cond = do
     -- Apply a condition to the input value, determining the result and the
     -- mutated value.
@@ -312,16 +229,16 @@ applyCondT a cond = do
     -- Convert from the 'Result' to a pair of Maybes: one to specify if the
     -- predicate succeeded, and the other to specify if recursion should be
     -- performed.  If there is no sub-recursion specified, return 'cond'.
-    return (fmap (Just . fromMaybe cond) (getResult r), a')
+    return (fmap (Just . fromMaybe cond) r, a')
 {-# INLINE applyCondT #-}
 
 -- | Case analysis of applying a pure condition to an input value.  The result
 --   is a pair whose first part is a pair of Maybes specifying if the input
 --   matched and if recursion is expected from this value, and whose second
 --   part is the (possibly) mutated input value.
-applyCond :: a -> Cond a b -> ((Maybe b, Maybe (Cond a b)), a)
-applyCond a cond = first (fmap (Just . fromMaybe cond) . getResult)
-                       (runIdentity (runStateT (getCondT cond) a))
+applyCond :: a -> Cond a b -> (CondR a Identity b, a)
+applyCond a cond = first (fmap (Just . fromMaybe cond))
+                         (runIdentity (runStateT (getCondT cond) a))
 {-# INLINE applyCond #-}
 
 guardM :: Monad m => m Bool -> CondT a m ()
@@ -344,7 +261,7 @@ consider :: Monad m => (a -> m (Maybe (b, a))) -> CondT a m b
 consider f = CondT $ do
     mres <- lift . f =<< get
     case mres of
-        Nothing      -> return Ignore
+        Nothing      -> return (Nothing, Nothing)
         Just (b, a') -> put a' >> return (accept' b)
 {-# INLINE consider #-}
 
@@ -371,8 +288,9 @@ matches = fmap isJust . optional
 -- >>> flip runCond "foo.hs" $ if_ bad (return "Success") (return "Failure")
 -- Just "Failure"
 if_ :: Monad m => CondT a m r -> CondT a m b -> CondT a m b -> CondT a m b
-if_ c x y =
-    CondT $ getCondT . maybe y (const x) . maybeFromResult =<< getCondT c
+if_ c x y = CondT $ do
+    t <- getCondT c
+    getCondT $ maybe y (const x) (fst t)
 {-# INLINE if_ #-}
 
 -- | 'when_' is just like 'when', except that it executes the body if the
@@ -448,13 +366,13 @@ ignore = mzero
 -- | 'norecurse' prevents recursion into the current entry's descendents, but
 --   does not ignore the entry itself.
 norecurse :: Monad m => CondT a m ()
-norecurse = CondT $ return $ Keep ()
+norecurse = CondT $ return (Just (), Nothing)
 {-# INLINE norecurse #-}
 
 -- | 'prune' is a synonym for both ignoring an entry and its descendents. It
 --   is the same as @ignore >> norecurse@.
 prune :: Monad m => CondT a m b
-prune = CondT $ return Ignore
+prune = CondT $ return (Nothing, Nothing)
 {-# INLINE prune #-}
 
 -- | 'recurse' changes the recursion predicate for any child elements.  For
@@ -471,7 +389,7 @@ prune = CondT $ return Ignore
 -- case, it would have meant that @.git@ is only looked for at the top-level
 -- of the search (i.e., the top-most element).
 recurse :: Monad m => CondT a m b -> CondT a m b
-recurse c = CondT $ setRecursion c `liftM` getCondT c
+recurse c = CondT $ fmap (const (Just c)) `liftM` getCondT c
 {-# INLINE recurse #-}
 
 -- | A specialized variant of 'runCondT' that simply returns True or False.

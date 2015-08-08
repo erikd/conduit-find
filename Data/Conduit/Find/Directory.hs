@@ -84,7 +84,7 @@ readDirStream dirp direntp = alloca loop
                     else readEntry dEnt
             else do
                 errno <- getErrno
-		if errno == eINTR
+                if errno == eINTR
                     then loop ptr_dEnt
                     else do
                         let Errno eo = errno

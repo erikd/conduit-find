@@ -9,7 +9,11 @@ unsigned int __hscore_d_type( struct dirent* d )
 
 unsigned int __hscore_d_namlen( struct dirent* d )
 {
+#ifdef _DIRENT_HAVE_D_NAMLEN
   return d->d_namlen;
+#else
+  return strlen (d->d_name)
+#endif
 }
 
 int __hscore_readdir_r(DIR * dir, struct dirent * d, struct dirent ** dp)

@@ -4,7 +4,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE CPP #-}
 
 module Data.Cond
     ( CondT(..), Cond
@@ -245,10 +244,8 @@ instance MonadThrow m => MonadThrow (CondT a m) where
 
 instance MonadCatch m => MonadCatch (CondT a m) where
     catch (CondT m) c = CondT $ m `catch` \e -> getCondT (c e)
-#if MIN_VERSION_exceptions(0,6,0)
 
 instance MonadMask m => MonadMask (CondT a m) where
-#endif
     mask a = CondT $ mask $ \u -> getCondT (a $ q u)
       where q u = CondT . u . getCondT
     uninterruptibleMask a =
@@ -267,7 +264,6 @@ instance MonadTrans (CondT a) where
     lift m = CondT $ liftM accept' $ lift m
     {-# INLINE lift #-}
 
-#if MIN_VERSION_monad_control(1,0,0)
 instance MonadBaseControl b m => MonadBaseControl b (CondT r m) where
     type StM (CondT r m) a = StM m (Result r m a, r)
     liftBaseWith f = CondT $ StateT $ \s ->
@@ -276,17 +272,6 @@ instance MonadBaseControl b m => MonadBaseControl b (CondT r m) where
     restoreM = CondT . StateT . const . restoreM
     {-# INLINE liftBaseWith #-}
     {-# INLINE restoreM #-}
-#else
-instance MonadBaseControl b m => MonadBaseControl b (CondT r m) where
-    newtype StM (CondT r m) a =
-        CondTStM { unCondTStM :: StM m (Result r m a, r) }
-    liftBaseWith f = CondT $ StateT $ \s ->
-        liftM (\x -> (accept' x, s)) $ liftBaseWith $ \runInBase -> f $ \k ->
-            liftM CondTStM $ runInBase $ runStateT (getCondT k) s
-    restoreM = CondT . StateT . const . restoreM . unCondTStM
-    {-# INLINE liftBaseWith #-}
-    {-# INLINE restoreM #-}
-#endif
 
 instance MFunctor (CondT a) where
     hoist nat (CondT m) = CondT $ hoist nat (liftM (hoist nat) m)

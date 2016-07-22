@@ -40,14 +40,14 @@ Library
       , regex-posix
       , mtl
       , semigroups
-      , exceptions
+      , exceptions           >= 0.6
       , time
       , streaming-commons
       , transformers
       , transformers-base
       , mmorph
       , either
-      , monad-control
+      , monad-control        >= 1.0
       , filepath
     exposed-modules:
         Data.Cond, Data.Conduit.Find

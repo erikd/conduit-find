@@ -118,11 +118,11 @@ recurse' = RecurseOnly Nothing
 -- RecurseOnly
 -- >>> maybeToResult (Just ()) :: Result () Identity ()
 -- KeepAndRecurse ()
-maybeToResult :: Monad m => Maybe a -> Result r m a
+maybeToResult :: Maybe a -> Result r m a
 maybeToResult Nothing  = recurse'
 maybeToResult (Just a) = accept' a
 
-maybeFromResult :: Monad m => Result r m a -> Maybe a
+maybeFromResult :: Result r m a -> Maybe a
 maybeFromResult Ignore               = Nothing
 maybeFromResult (Keep a)             = Just a
 maybeFromResult (RecurseOnly _)      = Nothing

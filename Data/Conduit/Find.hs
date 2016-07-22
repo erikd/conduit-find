@@ -478,7 +478,7 @@ newDirCounter = return ()
 --   recursion predicate to the search.  This conduit yields pairs of type
 --   @(FileEntry, a)@, where is the return value from the predicate at each
 --   step.
-sourceFindFiles :: (MonadIO m, MonadResource m)
+sourceFindFiles :: MonadResource m
                 => FindOptions
                 -> FilePath
                 -> CondT FileEntry m a
@@ -590,7 +590,7 @@ findFilePaths opts path predicate =
 
 -- | Calls 'findFilePaths' with the default set of finding options.
 --   Equivalent to @findFilePaths defaultFindOptions@.
-find :: (MonadIO m, MonadResource m)
+find :: MonadResource m
      => FilePath -> CondT FileEntry m a -> Producer m FilePath
 find = findFilePaths defaultFindOptions
 

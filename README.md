@@ -1,4 +1,9 @@
-find-conduit is essentially a souped version of GNU find for Haskell, using a
+# conduit-find
+
+[![Build Status](https://secure.travis-ci.org/erikd/conduit-find.png?branch=master)](http://travis-ci.org/erikd/conduit-find)
+
+
+conduit-find is essentially a souped version of GNU find for Haskell, using a
 DSL to provide both ease of us, and extensive flexbility.
 
 In its simplest form, let's compare some uses of find to find-conduit.  Bear
@@ -10,7 +15,7 @@ to either sink it to a list, or operate on the file paths as they are yielded.
 A typical find command:
 
     find src -name '*.hs' -type f -print
-    
+
 Would in find-conduit be:
 
     find "src" (glob "*.hs" <> regular) $$ mapM_C (liftIO . print)
@@ -21,36 +26,36 @@ while the `regular` predicate matches plain files.
 A more complicated example:
 
     find . -size +100M -perm 644 -mtime 1
-    
+
 Now in find-conduit:
 
     let megs = 1024 * 1024
         days = 86400
     now <- liftIO getCurrentTime
-    find "." ( fileSize (> 100*megs) 
+    find "." ( fileSize (> 100*megs)
             <> hasMode 0o644
             <> lastModified (> addUTCTime now (-(1*days)))
              )
-             
+
 Appending predicates like this expressing an "and" relationship.  Use `<|>` to
 express "or".  You can also negate any predicate:
 
     find "." (not_ (hasMode 0o644))
-    
+
 By default, predicates, whether matching or not, will allow recursion into
 directories.  In order to express that matching predicate should disallow
 recursion, use `prune`:
 
     find "." (prune (depth (> 2)))
-    
+
 This is the same as using `-maxdepth 2` in find.
 
     find "." (prune (filename_ (== "dist")))
-    
+
 This is the same as:
 
     find . \( -name dist -prune \) -o -print
-    
+
 ## Performance
 
 find-conduit strives to make file-finding a well performing operation.  To

@@ -1,27 +1,31 @@
-Name:                find-conduit
-Version:             0.4.4
+Name:                conduit-find
+Version:             0.1.0
 Synopsis:            A file-finding conduit that allows user control over traversals.
 License-file:        LICENSE
 License:             MIT
 Author:              John Wiegley
-Maintainer:          johnw@newartisans.com
+Maintainer:          Erik de Castro Lopo <erikd@mega-nerd.com>
 Build-Type:          Simple
-Cabal-Version:       >=1.10
+Cabal-Version:       >= 1.10
 Category:            System
+
+Homepage:            https://github.com/erikd/conduit-find
+Bug-Reports:         https://github.com/erikd/conduit-find/issues
+
 Description:
   A file-finding conduit that allows user control over traversals.  Please see
   the module 'Data.Conduit.Find' for more information.
 
 Source-repository head
   type: git
-  location: git://github.com/jwiegley/find-conduit.git
+  location: https://github.com/erikd/conduit-find.git
 
 Flag leafopt
   Description: Enable leaf optimization
   Default: True
 
 Library
-    default-language:   Haskell98
+    default-language:   Haskell2010
     ghc-options: -Wall -O2 -funbox-strict-fields
     if os(linux) && flag(leafopt)
         cpp-options: -DLEAFOPT=1
@@ -56,7 +60,7 @@ test-suite test
     ghc-options: -Wall -threaded
     build-depends:
         base
-      , find-conduit
+      , conduit-find
       , conduit
       , conduit-combinators
       , attoparsec
@@ -77,11 +81,11 @@ test-suite test
       , hspec                >= 1.4
 
 Test-suite doctests
-    Default-language: Haskell98
+    Default-language: Haskell2010
     Type:    exitcode-stdio-1.0
     Main-is: doctest.hs
     Hs-source-dirs: test
-    Build-depends:      
+    Build-depends:
         base
       , directory    >= 1.0
       , doctest      >= 0.8
@@ -95,7 +99,7 @@ Executable find-hs
     Hs-source-dirs: test
     Build-depends:
         base
-      , find-conduit
+      , conduit-find
       , conduit
       , conduit-extra
       , conduit-combinators

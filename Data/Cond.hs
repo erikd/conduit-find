@@ -4,6 +4,12 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE CPP #-}
+
+#if __GLASGOW_HASKELL__ == 800
+-- GHC 8.0 seems to go into some sort of optimiser loop with -O1 and above.
+{-# OPTIONS_GHC -O0 #-}
+#endif
 
 module Data.Cond
     ( CondT(..), Cond

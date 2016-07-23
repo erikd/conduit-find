@@ -1,5 +1,5 @@
 Name:                conduit-find
-Version:             0.1.0
+Version:             0.1.0.1
 Synopsis:            A file-finding conduit that allows user control over traversals.
 License-file:        LICENSE
 License:             MIT
@@ -104,7 +104,7 @@ Executable find-hs
       , conduit-extra
       , conduit-combinators
       , attoparsec
-      , unix                 >= 0.4.1.1
+      , unix-compat          >= 0.4.1.1
       , text                 >= 0.11.3.1
       , regex-posix
       , mtl

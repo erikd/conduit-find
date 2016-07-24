@@ -1,5 +1,5 @@
 Name:                conduit-find
-Version:             0.1.0.2
+Version:             0.1.0.3
 Synopsis:            A file-finding conduit that allows user control over traversals.
 License-file:        LICENSE
 License:             MIT

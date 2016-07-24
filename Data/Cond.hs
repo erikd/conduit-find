@@ -6,11 +6,6 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE CPP #-}
 
-#if __GLASGOW_HASKELL__ == 800
--- GHC 8.0 seems to go into some sort of optimiser loop with -O1 and above.
-{-# OPTIONS_GHC -O0 #-}
-#endif
-
 module Data.Cond
     ( CondT(..), Cond
 
@@ -184,7 +179,15 @@ instance (Monad m, Monoid b) => Monoid (CondT a m b) where
     {-# INLINE mappend #-}
 
 instance Monad m => Functor (CondT a m) where
+#if __GLASGOW_HASKELL__ < 710
+    -- GHC 8.0.1 seems to go into some sort of optimiser loop with -O1 and above
+    -- if this is `liftM`, but for GHC 7.8 `Applicative` is not a super class
+    -- of `Monad` so we still need this.
+    -- See: https://ghc.haskell.org/trac/ghc/ticket/12425
     fmap f (CondT g) = CondT (liftM (fmap f) g)
+#else
+    fmap f (CondT g) = CondT (liftA (fmap f) g)
+#endif
     {-# INLINE fmap #-}
 
 instance Monad m => Applicative (CondT a m) where

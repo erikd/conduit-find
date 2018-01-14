@@ -110,7 +110,7 @@ import           Text.Regex.Posix ((=~))
 {- $intro
 
 **find-conduit** is essentially a souped version of GNU find for Haskell,
-using a DSL to provide both ease of us, and extensive flexbility.
+using a DSL to provide both ease of use, and extensive flexbility.
 
 In its simplest form, let's compare some uses of find to find-conduit.  Bear
 in mind that the result of the find function is a conduit, so you're expected

@@ -2,8 +2,11 @@
 
 module Main where
 
-import Conduit
+import           Control.Monad.Trans.Resource (runResourceT)
+
+import Data.Conduit
 import Data.Conduit.Find
+import qualified Data.Conduit.List as DCL
 import Test.Hspec
 
 main :: IO ()
@@ -30,7 +33,7 @@ main = hspec $ do
                         not_ (glob "Setup*")
                         regular
                         not_ executable)
-                    $$ sinkList
+                    $$ DCL.consume
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
             "./dist/setup-config" `elem` xs `shouldBe` False
@@ -49,7 +52,7 @@ main = hspec $ do
                         when_ (name_ "dist") prune
                         regular
                         not_ executable)
-                    $$ sinkList
+                    $$ DCL.consume
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
             "./dist/setup-config" `elem` xs `shouldBe` False
@@ -65,7 +68,7 @@ main = hspec $ do
                         not_ (glob "Setup*")
                         regular
                         not_ executable)
-                    $$ sinkList
+                    $$ DCL.consume
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
             "./dist/setup-config" `elem` xs `shouldBe` False
@@ -82,7 +85,7 @@ main = hspec $ do
                         not_ (glob "Setup*")
                         regular
                         not_ executable)
-                    $$ sinkList
+                    $$ DCL.consume
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` False
             "./dist/setup-config" `elem` xs `shouldBe` False

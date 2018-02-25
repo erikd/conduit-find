@@ -1,12 +1,17 @@
 module Main where
 
-import Conduit
+import Data.Conduit
 import Control.Monad
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader.Class
 import Data.Conduit.Find
+import qualified Data.Conduit.List as DCL
 import Data.List
 import System.Environment
 import System.Posix.Process
+import           Control.Monad.Trans.Resource (runResourceT)
+import           Data.Conduit.Filesystem (sourceDirectoryDeep)
+
 
 main :: IO ()
 main = do
@@ -16,8 +21,9 @@ main = do
             putStrLn "Running sourceDirectoryDeep from conduit-extra"
             runResourceT $
                 sourceDirectoryDeep False dir
-                    =$ filterC (".hs" `isSuffixOf`)
-                    $$ mapM_C (liftIO . putStrLn)
+                    =$ DCL.filter (".hs" `isSuffixOf`)
+                    =$ DCL.mapM_ (liftIO . putStrLn)
+                    $$ DCL.sinkNull
 
         "find-conduit" -> do
             putStrLn "Running findFiles from find-conduit"
@@ -33,8 +39,9 @@ main = do
             runResourceT $
                 sourceFindFiles defaultFindOptions { findFollowSymlinks = False }
                     dir (return ())
-                    =$ filterC ((".hs" `isSuffixOf`) . entryPath . fst)
-                    $$ mapM_C (liftIO . putStrLn . entryPath . fst)
+                    =$ DCL.filter ((".hs" `isSuffixOf`) . entryPath . fst)
+                    =$ DCL.mapM_ (liftIO . putStrLn . entryPath . fst)
+                    $$ DCL.sinkNull
 
         "find" -> do
             putStrLn "Running GNU find"

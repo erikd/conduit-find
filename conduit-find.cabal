@@ -8,6 +8,7 @@ Maintainer:          Erik de Castro Lopo <erikd@mega-nerd.com>
 Build-Type:          Simple
 Cabal-Version:       >= 1.10
 Category:            System
+Stability:           Stable
 
 Homepage:            https://github.com/erikd/conduit-find
 Bug-Reports:         https://github.com/erikd/conduit-find/issues
@@ -31,20 +32,22 @@ Library
         cpp-options: -DLEAFOPT=1
     build-depends:
         base                 >= 3 && < 5
-      , conduit
+      , conduit              == 1.2.*
       , conduit-extra
       , conduit-combinators
       , attoparsec
       , unix-compat          >= 0.4.1.1
-      , text                 >= 0.11.3.1
+      , text                 == 1.2.*
       , regex-posix
       , mtl
       , semigroups
       , exceptions           >= 0.6
       , time
+      , resourcet            == 1.1.*
       , streaming-commons
       , transformers
       , transformers-base
+      , transformers-either  == 0.0.2
       , mmorph
       , either
       , monad-control        >= 1.0
@@ -79,6 +82,7 @@ test-suite test
       , mmorph
       , filepath
       , hspec                >= 1.4
+      , resourcet
 
 Test-suite doctests
     Default-language: Haskell2010
@@ -104,8 +108,8 @@ Executable find-hs
       , conduit-extra
       , conduit-combinators
       , attoparsec
-      , unix                 >= 0.4.1.1
-      , text                 >= 0.11.3.1
+      , unix
+      , text
       , regex-posix
       , mtl
       , time
@@ -118,3 +122,4 @@ Executable find-hs
       , monad-control
       , mmorph
       , filepath
+      , resourcet

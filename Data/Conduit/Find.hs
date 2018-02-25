@@ -75,21 +75,27 @@ module Data.Conduit.Find
     , FileEntry(..)
     ) where
 
-import           Conduit
 import           Control.Applicative
 import           Control.Exception
 import           Control.Monad hiding (forM_, forM)
+import           Control.Monad.Catch (MonadThrow)
+import           Control.Monad.IO.Class (MonadIO, liftIO)
 import           Control.Monad.Morph
 import           Control.Monad.State.Class
+import           Control.Monad.Trans.Control (MonadBaseControl)
+import           Control.Monad.Trans.Resource (MonadResource, runResourceT)
+
 import           Data.Attoparsec.Text as A
 import           Data.Bits
+import           Data.Conduit
+import qualified Data.Conduit.List as DCL
 import qualified Data.Cond as Cond
 import           Data.Cond hiding (test)
 import qualified Data.Conduit.Filesystem as CF
 #if LEAFOPT
 import           Data.IORef
 #endif
-import           Data.Maybe (fromMaybe,fromJust)
+import           Data.Maybe (fromMaybe, fromJust)
 import           Data.Monoid
 import           Data.Text (Text, unpack, pack)
 import           Data.Time
@@ -576,7 +582,7 @@ findFiles :: (MonadIO m, MonadBaseControl IO m, MonadThrow m)
 findFiles opts path predicate =
     runResourceT $
         sourceFindFiles opts { findIgnoreResults = True } path
-            (hoist lift predicate) $$ sinkNull
+            (hoist lift predicate) $$ DCL.sinkNull
 
 -- | A simpler version of 'findFiles', which yields only 'FilePath' values,
 --   and ignores any values returned by the predicate action.
@@ -586,7 +592,7 @@ findFilePaths :: (MonadIO m, MonadResource m)
               -> CondT FileEntry m a
               -> Producer m FilePath
 findFilePaths opts path predicate =
-    sourceFindFiles opts path predicate =$= mapC (entryPath . fst)
+    sourceFindFiles opts path predicate =$= DCL.map (entryPath . fst)
 
 -- | Calls 'findFilePaths' with the default set of finding options.
 --   Equivalent to @findFilePaths defaultFindOptions@.

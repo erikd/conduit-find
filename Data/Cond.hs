@@ -28,24 +28,24 @@ module Data.Cond
     , CondEitherT(..), fromCondT, toCondT
     ) where
 
-import Control.Applicative
+import Control.Applicative (Alternative (..), optional)
 import Control.Arrow (first)
 import Control.Monad hiding (mapM_, sequence_)
-import Control.Monad.Base
-import Control.Monad.Catch
-import Control.Monad.Morph
-import Control.Monad.Reader.Class
-import Control.Monad.State.Class
-import Control.Monad.Trans
-import Control.Monad.Trans.Control
-import Control.Monad.Trans.Either
-import Control.Monad.Trans.State (StateT(..), withStateT, evalStateT)
-import Data.Foldable
-import Data.Functor.Identity
+import Control.Monad.Base (MonadBase (..))
+import Control.Monad.Catch (MonadCatch (..), MonadMask (..), MonadThrow (..))
+import Control.Monad.Morph (MFunctor, hoist)
+import Control.Monad.Reader.Class (MonadReader (..), asks)
+import Control.Monad.State.Class (MonadState (..), gets)
+import Control.Monad.IO.Class (MonadIO (..))
+import Control.Monad.Trans (MonadTrans (..))
+import Control.Monad.Trans.Control (MonadBaseControl (..))
+import Control.Monad.Trans.Either (EitherT, left, runEitherT)
+import Control.Monad.Trans.State (StateT (..), withStateT, evalStateT)
+import Data.Foldable (asum, sequence_)
+import Data.Functor.Identity (Identity (..))
 import Data.Maybe (fromMaybe, isJust)
-import Data.Monoid hiding ((<>))
-import Data.Semigroup
-import Prelude hiding (mapM_, foldr1, sequence_)
+import Data.Semigroup (Semigroup (..))
+
 
 -- | 'Result' is an enriched 'Maybe' type which also specifies whether
 --   recursion should occur from the given input, and if so, how such
@@ -184,9 +184,9 @@ instance Monad m => Functor (CondT a m) where
     -- if this is `liftM`, but for GHC 7.8 `Applicative` is not a super class
     -- of `Monad` so we still need this.
     -- See: https://ghc.haskell.org/trac/ghc/ticket/12425
-    fmap f (CondT g) = CondT (liftM (fmap f) g)
+    fmap f (CondT g) = CondT (fmap (fmap f) g)
 #else
-    fmap f (CondT g) = CondT (liftA (fmap f) g)
+    fmap f (CondT g) = CondT (fmap (fmap f) g)
 #endif
     {-# INLINE fmap #-}
 

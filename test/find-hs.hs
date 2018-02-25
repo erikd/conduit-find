@@ -1,14 +1,14 @@
 module Main where
 
-import Data.Conduit
-import Control.Monad
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Reader.Class
-import Data.Conduit.Find
+import           Data.Conduit ((=$), ($$))
+import           Control.Monad (guard, void)
+import           Control.Monad.IO.Class (liftIO)
+import           Control.Monad.Reader.Class (asks)
+import           Data.Conduit.Find
 import qualified Data.Conduit.List as DCL
-import Data.List
-import System.Environment
-import System.Posix.Process
+import           Data.List (isSuffixOf)
+import           System.Environment (getArgs)
+import           System.Posix.Process (executeFile)
 import           Control.Monad.Trans.Resource (runResourceT)
 import           Data.Conduit.Filesystem (sourceDirectoryDeep)
 
@@ -30,7 +30,7 @@ main = do
             findFiles defaultFindOptions { findFollowSymlinks = False }
                 dir $ do
                     path <- asks entryPath
-                    guard (".hs" `isSuffixOf` path)
+                    void $ guard (".hs" `isSuffixOf` path)
                     norecurse
                     liftIO $ putStrLn path
 
@@ -46,3 +46,6 @@ main = do
         "find" -> do
             putStrLn "Running GNU find"
             executeFile "find" True [dir, "-name", "*.hs", "-print"] Nothing
+
+        _ ->
+            putStrLn $ "Unknown command " ++ show command

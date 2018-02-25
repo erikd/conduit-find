@@ -75,34 +75,36 @@ module Data.Conduit.Find
     , FileEntry(..)
     ) where
 
-import           Control.Applicative
-import           Control.Exception
+import           Control.Applicative (Alternative (..))
+import           Control.Exception (IOException, catch, throwIO)
 import           Control.Monad hiding (forM_, forM)
 import           Control.Monad.Catch (MonadThrow)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
-import           Control.Monad.Morph
-import           Control.Monad.State.Class
+import           Control.Monad.Morph (hoist, lift)
+import           Control.Monad.State.Class (get, gets, modify, put)
 import           Control.Monad.Trans.Control (MonadBaseControl)
 import           Control.Monad.Trans.Resource (MonadResource, runResourceT)
 
 import           Data.Attoparsec.Text as A
-import           Data.Bits
-import           Data.Conduit
+import           Data.Bits ((.&.))
+import           Data.Conduit (Producer, (=$=), ($$))
+import qualified Data.Conduit as DC
 import qualified Data.Conduit.List as DCL
 import qualified Data.Cond as Cond
 import           Data.Cond hiding (test)
 import qualified Data.Conduit.Filesystem as CF
 #if LEAFOPT
-import           Data.IORef
+import           Data.IORef (IORef, newIORef, modifyIORef, readIORef)
 #endif
 import           Data.Maybe (fromMaybe, fromJust)
-import           Data.Monoid
+import           Data.Monoid ((<>))
 import           Data.Text (Text, unpack, pack)
-import           Data.Time
-import           Data.Time.Clock.POSIX
+import           Data.Time (UTCTime,  diffUTCTime)
+import           Data.Time.Clock.POSIX (getCurrentTime, posixSecondsToUTCTime)
 import qualified System.FilePath as FP
-import           System.PosixCompat.Files
-import           System.PosixCompat.Types
+import           System.PosixCompat.Files (FileStatus, linkCount)
+import qualified System.PosixCompat.Files as Files
+import           System.PosixCompat.Types (EpochTime, FileMode)
 import           Text.Regex.Posix ((=~))
 
 {- $intro
@@ -307,21 +309,21 @@ anewer_ path = do
         Nothing     -> prune >> error "This is never reached"
         Just (s, _) -> guard $ diffUTCTime (f s) (f es) > 0
   where
-    f = posixSecondsToUTCTime . realToFrac . accessTime
+    f = posixSecondsToUTCTime . realToFrac . Files.accessTime
 
 -- cmin_ = error "NYI"
 -- cnewer_ = error "NYI"
 -- ctime_ = error "NYI"
 
 empty_ :: MonadIO m => CondT FileEntry m ()
-empty_ = (regular   >> hasStatus ((== 0) . fileSize))
+empty_ = (regular   >> hasStatus ((== 0) . Files.fileSize))
      <|> (directory >> hasStatus ((== 2) . linkCount))
 
 executable_ :: MonadIO m => CondT FileEntry m ()
 executable_ = executable
 
 gid_ :: MonadIO m => Int -> CondT FileEntry m ()
-gid_ n = hasStatus ((== n) . fromIntegral . fileGroup)
+gid_ n = hasStatus ((== n) . fromIntegral . Files.fileGroup)
 
 {-
 group_ name
@@ -365,8 +367,8 @@ xtype_ c
 statFilePath :: Bool -> Bool -> FP.FilePath -> IO (Maybe FileStatus)
 statFilePath follow ignoreErrors path = do
     let doStat = (if follow
-                  then getFileStatus
-                  else getSymbolicLinkStatus) path
+                  then Files.getFileStatus
+                  else Files.getSymbolicLinkStatus) path
     catch (Just <$> doStat) $ \e ->
         if ignoreErrors
         then return Nothing
@@ -414,16 +416,16 @@ hasStatus :: MonadIO m => (FileStatus -> Bool) -> CondT FileEntry m ()
 hasStatus f = guard . f =<< applyStat Nothing
 
 regular :: MonadIO m => CondT FileEntry m ()
-regular = hasStatus isRegularFile
+regular = hasStatus Files.isRegularFile
 
 executable :: MonadIO m => CondT FileEntry m ()
-executable = hasMode ownerExecuteMode
+executable = hasMode Files.ownerExecuteMode
 
 directory :: MonadIO m => CondT FileEntry m ()
-directory = hasStatus isDirectory
+directory = hasStatus Files.isDirectory
 
 hasMode :: MonadIO m => FileMode -> CondT FileEntry m ()
-hasMode m = hasStatus (\s -> fileMode s .&. m /= 0)
+hasMode m = hasStatus (\s -> Files.fileMode s .&. m /= 0)
 
 withStatusTime :: MonadIO m
                => (FileStatus -> EpochTime) -> (UTCTime -> Bool)
@@ -431,10 +433,10 @@ withStatusTime :: MonadIO m
 withStatusTime g f = hasStatus (f . posixSecondsToUTCTime . realToFrac . g)
 
 lastAccessed_ :: MonadIO m => (UTCTime -> Bool) -> CondT FileEntry m ()
-lastAccessed_ = withStatusTime accessTime
+lastAccessed_ = withStatusTime Files.accessTime
 
 lastModified_ :: MonadIO m => (UTCTime -> Bool) -> CondT FileEntry m ()
-lastModified_ = withStatusTime modificationTime
+lastModified_ = withStatusTime Files.modificationTime
 
 regex :: Monad m => String -> CondT FileEntry m ()
 regex pat = filename_ (=~ pat)
@@ -469,7 +471,7 @@ glob g = case parseOnly globParser (pack g) of
                             else [x]
 
 #if LEAFOPT
-type DirCounter = IORef LinkCount
+type DirCounter = IORef Word
 
 newDirCounter :: MonadIO m => m DirCounter
 newDirCounter = liftIO $ newIORef 1
@@ -513,7 +515,7 @@ sourceFindFiles findOptions startPath predicate = do
             else this >> next
       where
         yieldEntry _      Nothing    = return ()
-        yieldEntry entry' (Just res) = yield (entry', res)
+        yieldEntry entry' (Just res) = DC.yield (entry', res)
 
     walkChildren :: MonadResource m
                  => DirCounter
@@ -526,7 +528,7 @@ sourceFindFiles findOptions startPath predicate = do
     -- directory
     walkChildren !dc !entry !path (Just !cond) = do
         st <- lift $ checkIfDirectory dc entry path
-        when (fmap isDirectory st == Just True) $ do
+        when (fmap Files.isDirectory st == Just True) $ do
 #if LEAFOPT
             -- Update directory count for the parent directory.
             liftIO $ modifyIORef dc pred
@@ -536,12 +538,12 @@ sourceFindFiles findOptions startPath predicate = do
                 opts' = (entryFindOptions entry)
                     { findLeafOptimization = leafOpt && lc >= 0
                     }
-            dc' <- liftIO $ newIORef lc
+            dc' <- liftIO $ newIORef (fromIntegral lc :: Word)
 #else
             let dc'   = dc
                 opts' = entryFindOptions entry
 #endif
-            CF.sourceDirectory path =$= awaitForever (go dc' opts')
+            CF.sourceDirectory path =$= DC.awaitForever (go dc' opts')
       where
         go dc' opts' fp =
             let entry' = newFileEntry fp (succ (entryDepth entry)) opts'

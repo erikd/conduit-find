@@ -10,9 +10,6 @@ import Data.List
 main :: IO ()
 main = getSources >>= \sources -> doctest $
     "-iData"
-  : "-idist/build/autogen"
-  : "-optP-include"
-  : "-optPdist/build/autogen/cabal_macros.h"
   : sources
 
 getSources :: IO [FilePath]

@@ -47,9 +47,7 @@ Library
       , streaming-commons
       , transformers
       , transformers-base
-      , transformers-either  == 0.1.*
       , mmorph
-      , either
       , monad-control        >= 1.0
       , filepath
     exposed-modules:

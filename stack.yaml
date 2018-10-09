@@ -1,10 +1,9 @@
-resolver: lts-12.1
+resolver: lts-12.12
 
 packages:
 - '.'
 
-extra-deps:
-- transformers-either-0.1.1
+extra-deps: []
 
 # Override default flag values for local packages and extra-deps
 flags: {}

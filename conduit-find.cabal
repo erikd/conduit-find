@@ -32,7 +32,7 @@ Library
         cpp-options: -DLEAFOPT=1
     build-depends:
         base                 >= 3 && < 5
-      , conduit              == 1.2.*
+      , conduit              >= 1.2
       , conduit-extra
       , conduit-combinators
       , attoparsec
@@ -43,15 +43,16 @@ Library
       , semigroups
       , exceptions           >= 0.6
       , time
-      , resourcet            == 1.1.*
+      , resourcet            >= 1.1
       , streaming-commons
       , transformers
       , transformers-base
-      , transformers-either  == 0.0.2
+      , transformers-either
       , mmorph
       , either
       , monad-control        >= 1.0
       , filepath
+      , unliftio-core
     exposed-modules:
         Data.Cond, Data.Conduit.Find
 
@@ -83,6 +84,7 @@ test-suite test
       , filepath
       , hspec                >= 1.4
       , resourcet
+      , unliftio-core
 
 Test-suite doctests
     Default-language: Haskell2010
@@ -123,3 +125,4 @@ Executable find-hs
       , mmorph
       , filepath
       , resourcet
+      , unliftio-core

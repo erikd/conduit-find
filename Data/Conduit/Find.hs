@@ -80,6 +80,7 @@ import           Control.Exception (IOException, catch, throwIO)
 import           Control.Monad hiding (forM_, forM)
 import           Control.Monad.Catch (MonadThrow)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
+import           Control.Monad.IO.Unlift (MonadUnliftIO)
 import           Control.Monad.Morph (hoist, lift)
 import           Control.Monad.State.Class (get, gets, modify, put)
 import           Control.Monad.Trans.Control (MonadBaseControl)
@@ -576,7 +577,7 @@ sourceFindFiles findOptions startPath predicate = do
                 path
             else return Nothing
 
-findFiles :: (MonadIO m, MonadBaseControl IO m, MonadThrow m)
+findFiles :: (MonadIO m, MonadBaseControl IO m, MonadThrow m, MonadUnliftIO m)
           => FindOptions
           -> FilePath
           -> CondT FileEntry m a

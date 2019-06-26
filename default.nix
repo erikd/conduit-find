@@ -13,7 +13,7 @@ mkDerivation {
   buildDepends = [
     attoparsec base conduit conduit-combinators conduit-extra either
     exceptions filepath mmorph monad-control mtl regex-posix semigroups
-    streaming-commons text time transformers transformers-base unix
+    streaming-commons text time transformers transformers-base transformers-either unix
     unix-compat
   ];
   testDepends = [

@@ -1,27 +1,58 @@
-{ mkDerivation, attoparsec, base, conduit, conduit-combinators
-, conduit-extra, directory, doctest, either, exceptions, filepath
-, hspec, mmorph, monad-control, mtl, regex-posix, semigroups
-, stdenv, streaming-commons, text, time, transformers
-, transformers-base, transformers-either, unliftio-core, unix, unix-compat
+{ system ? builtins.currentSystem or "x86_64-linux"
+, ghc ? "ghc9101"
 }:
-mkDerivation {
-  pname = "find-conduit";
-  version = "0.4.4";
-  src = ./.;
-  isLibrary = true;
-  isExecutable = true;
-  buildDepends = [
-    attoparsec base conduit conduit-combinators conduit-extra either
-    exceptions filepath mmorph monad-control mtl regex-posix semigroups
-    streaming-commons text time transformers transformers-base transformers-either unix
-    unix-compat
+
+let
+  nix = import ./nix;
+  pkgs = nix.pkgSetForSystem system {
+    config = {
+      allowBroken = true;
+      allowUnfree = true;
+    };
+  };
+  inherit (pkgs) lib;
+  hsPkgSetOverlay = pkgs.callPackage ./nix/haskell/overlay.nix {
+    inherit (nix) sources;
+  };
+
+  sources = [
+    "^src.*$"
+    "^test.*$"
+    "^.*\\.cabal$"
   ];
-  testDepends = [
-    attoparsec base conduit conduit-combinators directory doctest
-    either exceptions filepath hspec mmorph monad-control mtl
-    regex-posix semigroups streaming-commons text time transformers
-    transformers-base transformers-either unliftio-core unix-compat
-  ];
-  description = "A file-finding conduit that allows user control over traversals";
-  license = stdenv.lib.licenses.mit;
+
+  base = hsPkgs.callCabal2nix "conduit-find" (lib.sourceByRegex ./. sources) { };
+  conduit-find-overlay = _hf: _hp: { conduit-find = base; };
+  baseHaskellPkgs = pkgs.haskell.packages.${ghc};
+  hsOverlays = [ hsPkgSetOverlay conduit-find-overlay ];
+  hsPkgs = baseHaskellPkgs.override (old: {
+    overrides =
+      builtins.foldl' pkgs.lib.composeExtensions (old.overrides or (_: _: { }))
+      hsOverlays;
+  });
+
+  hls = pkgs.haskell.lib.overrideCabal hsPkgs.haskell-language-server
+    (_: { enableSharedExecutables = true; });
+
+  shell = hsPkgs.shellFor {
+    packages = p: [ p.conduit-find ];
+    nativeBuildInputs = (with pkgs; [
+      cabal-install
+      ghcid
+      hlint
+      niv
+    ]) ++ [ hls ];
+    shellHook = ''
+      export PS1='$ '
+      echo $(dirname $(dirname $(which ghc)))/share/doc > .haddock-ref
+    '';
+  };
+
+  conduit-find = hsPkgs.conduit-find;
+in {
+  inherit hsPkgs;
+  inherit ghc;
+  inherit pkgs;
+  inherit shell;
+  inherit conduit-find;
 }

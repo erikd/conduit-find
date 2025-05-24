@@ -1,17 +1,17 @@
+cabal-version:       3.0
 Name:                conduit-find
-Version:             0.1.0.3
+Version:             0.2.0.0
 Synopsis:            A file-finding conduit that allows user control over traversals.
 License-file:        LICENSE
 License:             MIT
 Author:              John Wiegley
-Maintainer:          Erik de Castro Lopo <erikd@mega-nerd.com>
+Maintainer:          Daniil Iaitskov <dyaitskov@gmail.com>
 Build-Type:          Simple
-Cabal-Version:       >= 1.10
 Category:            System
 Stability:           Stable
 
-Homepage:            https://github.com/erikd/conduit-find
-Bug-Reports:         https://github.com/erikd/conduit-find/issues
+Homepage:            https://github.com/yaitskov/conduit-find
+Bug-Reports:         https://github.com/yaitskov/conduit-find/issues
 
 Description:
   A file-finding conduit that allows user control over traversals.  Please see
@@ -19,7 +19,7 @@ Description:
 
 Source-repository head
   type: git
-  location: https://github.com/erikd/conduit-find.git
+  location: https://github.com/yaitskov/conduit-find.git
 
 Flag leafopt
   Description: Enable leaf optimization
@@ -32,13 +32,13 @@ Library
     if os(linux) && flag(leafopt)
         cpp-options: -DLEAFOPT=1
     build-depends:
-        base                 >= 3 && < 5
+        base                 >= 4 && < 5
       , conduit              >= 1.2
       , conduit-extra
       , conduit-combinators
       , attoparsec
       , unix-compat          >= 0.4.1.1
-      , text                 == 1.2.*
+      , text                 >= 2.0
       , regex-posix
       , mtl
       , semigroups

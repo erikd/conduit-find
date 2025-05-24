@@ -2,3 +2,6 @@
 cabal.sandbox.config
 /dist/
 /Setup
+/result
+.haddock-ref
+/dist-newstyle

@@ -1,0 +1,8 @@
+{
+  "nixpkgs": {
+      "branch": "master",
+      "repo": "/home/dan/pro/nixpkgs",
+      "rev": "e7a98efedcc1d0a2a8455580c562b20718c36444",
+      "type": "git"
+  }
+}

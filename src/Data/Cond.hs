@@ -32,7 +32,7 @@ import Control.Applicative (Alternative (..), optional)
 import Control.Arrow (first)
 import Control.Monad hiding (mapM_, sequence_)
 import Control.Monad.Base (MonadBase (..))
-import Control.Monad.Catch (MonadCatch (..), MonadMask (..), MonadThrow (..))
+import Control.Monad.Catch (MonadCatch (..), {- MonadMask (..), -} MonadThrow (..))
 import Control.Monad.Morph (MFunctor, hoist)
 import Control.Monad.Reader.Class (MonadReader (..), asks)
 import Control.Monad.State.Class (MonadState (..), gets)
@@ -41,10 +41,10 @@ import Control.Monad.Trans (MonadTrans (..))
 import Control.Monad.Trans.Control (MonadBaseControl (..))
 import Control.Monad.Trans.Either (EitherT, left, runEitherT)
 import Control.Monad.Trans.State (StateT (..), withStateT, evalStateT)
-import Data.Foldable (asum, sequence_)
+import Data.Foldable (asum) -- , sequence_)
 import Data.Functor.Identity (Identity (..))
 import Data.Maybe (fromMaybe, isJust)
-import Data.Semigroup (Semigroup (..))
+-- import Data.Semigroup (Semigroup (..))
 
 
 -- | 'Result' is an enriched 'Maybe' type which also specifies whether
@@ -175,8 +175,8 @@ instance (Monad m, Semigroup b) => Semigroup (CondT a m b) where
 instance (Monad m, Monoid b) => Monoid (CondT a m b) where
     mempty  = CondT $ return $ accept' mempty
     {-# INLINE mempty #-}
-    mappend = liftM2 mappend
-    {-# INLINE mappend #-}
+    -- mappend = liftM2 mappend
+    -- {-# INLINE mappend #-}
 
 instance Monad m => Functor (CondT a m) where
 #if __GLASGOW_HASKELL__ < 710
@@ -191,16 +191,18 @@ instance Monad m => Functor (CondT a m) where
     {-# INLINE fmap #-}
 
 instance Monad m => Applicative (CondT a m) where
-    pure  = return
+    pure  = CondT . pure . accept' -- pure
     {-# INLINE pure #-}
     (<*>) = ap
     {-# INLINE (<*>) #-}
 
-instance Monad m => Monad (CondT a m) where
-    return = CondT . return . accept'
-    {-# INLINE return #-}
+instance MonadFail m => MonadFail (CondT a m) where
     fail _ = mzero
     {-# INLINE fail #-}
+
+instance Monad m => Monad (CondT a m) where
+    -- return = CondT . pure . accept'
+    -- {-# INLINE return #-}
     CondT f >>= k = CondT $ do
         r <- f
         case r of
@@ -254,12 +256,22 @@ instance MonadThrow m => MonadThrow (CondT a m) where
 instance MonadCatch m => MonadCatch (CondT a m) where
     catch (CondT m) c = CondT $ m `catch` \e -> getCondT (c e)
 
-instance MonadMask m => MonadMask (CondT a m) where
-    mask a = CondT $ mask $ \u -> getCondT (a $ q u)
-      where q u = CondT . u . getCondT
-    uninterruptibleMask a =
-        CondT $ uninterruptibleMask $ \u -> getCondT (a $ q u)
-      where q u = CondT . u . getCondT
+-- instance MonadMask m => MonadMask (CondT a m) where
+--     mask a = CondT $ mask $ \u -> getCondT (a $ q u)
+--       where q u = CondT . u . getCondT
+--     uninterruptibleMask a =
+--         CondT $ uninterruptibleMask $ \u -> getCondT (a $ q u)
+--       where q u = CondT . u . getCondT
+--     generalBracket acquire release use = CondT $ do
+--       (eb, ec) <- generalBracket (getCondT acquire)
+--         (\resource exitCase -> getCondT (release resource exitCase))
+--         (\case
+--             Ignore -> pure Ignore
+--             Keep b ->
+--             )
+
+--       pure $ accept' (eb, ec)
+      --where q u = CondT . u . getCondT
 
 instance MonadBase b m => MonadBase b (CondT a m) where
     liftBase m = CondT $ liftM accept' $ liftBase m
@@ -285,7 +297,7 @@ instance MonadBaseControl b m => MonadBaseControl b (CondT r m) where
 instance MFunctor (CondT a) where
     hoist nat (CondT m) = CondT $ hoist nat (liftM (hoist nat) m)
     {-# INLINE hoist #-}
-
+
 runCondT :: Monad m => CondT a m b -> a -> m (Maybe b)
 runCondT (CondT f) a = maybeFromResult `liftM` evalStateT f a
 {-# INLINE runCondT #-}

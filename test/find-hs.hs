@@ -1,29 +1,34 @@
 module Main where
 
-import           Data.Conduit ((=$), ($$))
-import           Control.Monad (guard, void)
-import           Control.Monad.IO.Class (liftIO)
-import           Control.Monad.Reader.Class (asks)
-import           Data.Conduit.Find
-import qualified Data.Conduit.List as DCL
-import           Data.List (isSuffixOf)
-import           System.Environment (getArgs)
-import           System.Posix.Process (executeFile)
-import           Control.Monad.Trans.Resource (runResourceT)
-import           Data.Conduit.Filesystem (sourceDirectoryDeep)
+import Data.Conduit ((.|), runConduitRes)
+import Control.Monad (guard, void)
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Reader.Class (asks)
+import Data.Conduit.Find
+import Data.Conduit.List qualified as DCL
+import Data.List (isSuffixOf)
+import System.Environment (getArgs)
+import System.Posix.Process (executeFile)
+import Data.Conduit.Filesystem (sourceDirectoryDeep)
 
 
 main :: IO ()
 main = do
-    [command, dir] <- getArgs
+    getArgs >>= \case
+      [command, dir] -> runCommand command dir
+      [command] -> runCommand command "."
+      [] -> runCommand "find" "."
+      o -> fail $ "Bad arguments: " <> show o
+
+runCommand command dir =
     case command of
         "conduit" -> do
             putStrLn "Running sourceDirectoryDeep from conduit-extra"
-            runResourceT $
+            runConduitRes $
                 sourceDirectoryDeep False dir
-                    =$ DCL.filter (".hs" `isSuffixOf`)
-                    =$ DCL.mapM_ (liftIO . putStrLn)
-                    $$ DCL.sinkNull
+                    .| DCL.filter (".hs" `isSuffixOf`)
+                    .| DCL.mapM_ (liftIO . putStrLn)
+                    .| DCL.sinkNull
 
         "find-conduit" -> do
             putStrLn "Running findFiles from find-conduit"
@@ -36,12 +41,12 @@ main = do
 
         "find-conduit2" -> do
             putStrLn "Running findFiles from find-conduit"
-            runResourceT $
+            runConduitRes $
                 sourceFindFiles defaultFindOptions { findFollowSymlinks = False }
                     dir (return ())
-                    =$ DCL.filter ((".hs" `isSuffixOf`) . entryPath . fst)
-                    =$ DCL.mapM_ (liftIO . putStrLn . entryPath . fst)
-                    $$ DCL.sinkNull
+                    .| DCL.filter ((".hs" `isSuffixOf`) . entryPath . fst)
+                    .| DCL.mapM_ (liftIO . putStrLn . entryPath . fst)
+                    .| DCL.sinkNull
 
         "find" -> do
             putStrLn "Running GNU find"

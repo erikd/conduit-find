@@ -1,8 +1,12 @@
 {
-  "nixpkgs": {
-      "branch": "master",
-      "repo": "/home/dan/pro/nixpkgs",
-      "rev": "e7a98efedcc1d0a2a8455580c562b20718c36444",
-      "type": "git"
-  }
+    "nixpkgs": {
+        "branch": "master",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "e7a98efedcc1d0a2a8455580c562b20718c36444",
+        "sha256": "sha256:0pcvllrvnbr2s1sfc8gizz864b1wwz9mac3ri3fmkrxvajwlmmdd",
+        "type": "tarball",
+        "url": "https://github.com/NixOS/nixpkgs/archive/e7a98efedcc1d0a2a8455580c562b20718c36444.tar.gz",
+        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
+    }
 }

@@ -16,6 +16,8 @@ let
   };
 
   sources = [
+    "^README[.]md$"
+    "^LICENSE$"
     "^src.*$"
     "^test.*$"
     "^.*\\.cabal$"

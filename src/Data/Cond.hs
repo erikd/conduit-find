@@ -4,6 +4,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE CPP #-}
 
 module Data.Cond
@@ -30,9 +31,10 @@ module Data.Cond
 
 import Control.Applicative (Alternative (..), optional)
 import Control.Arrow (first)
+import GHC.Stack
 import Control.Monad hiding (mapM_, sequence_)
 import Control.Monad.Base (MonadBase (..))
-import Control.Monad.Catch (MonadCatch (..), {- MonadMask (..), -} MonadThrow (..))
+import Control.Monad.Catch (MonadCatch (..), MonadMask (..), MonadThrow (..), ExitCase (..))
 import Control.Monad.Morph (MFunctor, hoist)
 import Control.Monad.Reader.Class (MonadReader (..), asks)
 import Control.Monad.State.Class (MonadState (..), gets)
@@ -41,10 +43,9 @@ import Control.Monad.Trans (MonadTrans (..))
 import Control.Monad.Trans.Control (MonadBaseControl (..))
 import Control.Monad.Trans.Either (EitherT, left, runEitherT)
 import Control.Monad.Trans.State (StateT (..), withStateT, evalStateT)
-import Data.Foldable (asum) -- , sequence_)
+import Data.Foldable (asum)
 import Data.Functor.Identity (Identity (..))
 import Data.Maybe (fromMaybe, isJust)
--- import Data.Semigroup (Semigroup (..))
 
 
 -- | 'Result' is an enriched 'Maybe' type which also specifies whether
@@ -256,22 +257,63 @@ instance MonadThrow m => MonadThrow (CondT a m) where
 instance MonadCatch m => MonadCatch (CondT a m) where
     catch (CondT m) c = CondT $ m `catch` \e -> getCondT (c e)
 
--- instance MonadMask m => MonadMask (CondT a m) where
---     mask a = CondT $ mask $ \u -> getCondT (a $ q u)
---       where q u = CondT . u . getCondT
---     uninterruptibleMask a =
---         CondT $ uninterruptibleMask $ \u -> getCondT (a $ q u)
---       where q u = CondT . u . getCondT
---     generalBracket acquire release use = CondT $ do
---       (eb, ec) <- generalBracket (getCondT acquire)
---         (\resource exitCase -> getCondT (release resource exitCase))
---         (\case
---             Ignore -> pure Ignore
---             Keep b ->
---             )
+instance MonadMask m => MonadMask (CondT aa m) where
+    mask a = CondT $ mask $ \u -> getCondT (a $ q u)
+      where q u = CondT . u . getCondT
+    uninterruptibleMask a =
+        CondT $ uninterruptibleMask $ \u -> getCondT (a $ q u)
+      where q u = CondT . u . getCondT
+    generalBracket :: forall a b c. HasCallStack =>
+      CondT aa m a ->
+      (a -> ExitCase b -> CondT aa m c) ->
+      (a -> CondT aa m b) ->
+      CondT aa m (b, c)
+    generalBracket acquire release use = CondT go
+      where
+        arg1 :: StateT aa m (Result aa m a)
+        arg1 = getCondT acquire
+        arg2 :: (Result aa m a) -> ExitCase (Result aa m b) -> StateT aa m (Result aa m c)
+        arg2 a b = case a of
+          Ignore -> pure Ignore
+          Keep a' ->
+            case b of
+              ExitCaseSuccess b' ->
+                case b' of
+                  Ignore -> getCondT $ release a' ExitCaseAbort
+                  Keep b'' -> getCondT $ release a' (ExitCaseSuccess b'')
+                  RecurseOnly _mb -> getCondT $ release a' ExitCaseAbort -- set mb?
+                  KeepAndRecurse b'' _mb -> getCondT $ release a' (ExitCaseSuccess b'') -- set mb?
+              ExitCaseException se -> getCondT $ release a' (ExitCaseException se)
+              ExitCaseAbort -> getCondT $ release a' ExitCaseAbort
+          RecurseOnly _ma ->
+            pure Ignore
+          KeepAndRecurse a' _ma ->
+            case b of
+              ExitCaseSuccess b' ->
+                case b' of
+                  Ignore -> getCondT $ release a' ExitCaseAbort
+                  Keep b'' -> getCondT $ release a' (ExitCaseSuccess b'')
+                  RecurseOnly _mb -> getCondT $ release a' ExitCaseAbort -- set mb?
+                  KeepAndRecurse b'' _mb -> getCondT $ release a' (ExitCaseSuccess b'') -- set mb?
+              ExitCaseException se -> getCondT $ release a' (ExitCaseException se)
+              ExitCaseAbort -> getCondT $ release a' ExitCaseAbort
 
---       pure $ accept' (eb, ec)
-      --where q u = CondT . u . getCondT
+        arg3 :: (Result aa m a) -> StateT aa m (Result aa m b)
+        arg3 a = getCondT (CondT (pure a) >>= use)
+        gb = generalBracket
+        go :: HasCallStack => StateT aa m (Result aa m (b, c))
+        go = do
+          gb arg1 arg2 arg3 >>= \case
+            -- anyway looks like a total nonsense - i give up
+            (Keep b, Keep c) -> pure $ Keep (b, c)
+            (RecurseOnly mb, RecurseOnly mc) -> pure $ RecurseOnly (liftA2 (,) <$> mb <*> mc)
+            (KeepAndRecurse b mb, KeepAndRecurse c mc) ->
+              pure $ KeepAndRecurse (b, c) (liftA2 (,) <$> mb <*> mc)
+            (Keep b, KeepAndRecurse c _) -> pure $ Keep (b, c)
+            (KeepAndRecurse b _, Keep c) -> pure $ Keep (b, c)
+            (KeepAndRecurse _ mb, RecurseOnly mc) -> pure $ RecurseOnly (liftA2 (,) <$> mb <*> mc)
+            (RecurseOnly mb, KeepAndRecurse _ mc) -> pure $ RecurseOnly (liftA2 (,) <$> mb <*> mc)
+            _ -> pure Ignore
 
 instance MonadBase b m => MonadBase b (CondT a m) where
     liftBase m = CondT $ liftM accept' $ liftBase m

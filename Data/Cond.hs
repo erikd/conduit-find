@@ -199,8 +199,6 @@ instance Monad m => Applicative (CondT a m) where
 instance Monad m => Monad (CondT a m) where
     return = CondT . return . accept'
     {-# INLINE return #-}
-    fail _ = mzero
-    {-# INLINE fail #-}
     CondT f >>= k = CondT $ do
         r <- f
         case r of
@@ -213,6 +211,10 @@ instance Monad m => Monad (CondT a m) where
                     _                  -> n
             RecurseOnly l -> return $ RecurseOnly (fmap (>>= k) l)
             KeepAndRecurse b _ -> getCondT (k b)
+
+instance MonadFail m => MonadFail (CondT a m) where
+    fail _ = mzero
+    {-# INLINE fail #-}
 
 instance Monad m => MonadReader a (CondT a m) where
     ask               = CondT $ gets accept'

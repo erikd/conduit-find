@@ -9,6 +9,15 @@ Build-Type:          Simple
 Cabal-Version:       >= 1.10
 Category:            System
 Stability:           Stable
+tested-with:
+  GHC ==8.10.7
+   || ==9.0.2
+   || ==9.2.8
+   || ==9.4.8
+   || ==9.6.7
+   || ==9.8.4
+   || ==9.10.2
+   || ==9.12.1
 
 Homepage:            https://github.com/erikd/conduit-find
 Bug-Reports:         https://github.com/erikd/conduit-find/issues
@@ -69,8 +78,8 @@ test-suite test
       , conduit
       , conduit-combinators
       , attoparsec
-      , unix-compat          >= 0.4.1.1
-      , text                 >= 0.11.3.1
+      , unix-compat
+      , text
       , regex-posix
       , mtl
       , time

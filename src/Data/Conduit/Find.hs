@@ -3,8 +3,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 
 module Data.Conduit.Find
     (
@@ -84,11 +84,11 @@ import           Control.Monad.IO.Unlift (MonadUnliftIO)
 import           Control.Monad.Morph (hoist, lift)
 import           Control.Monad.State.Class (get, gets, modify, put)
 import           Control.Monad.Trans.Control (MonadBaseControl)
-import           Control.Monad.Trans.Resource (MonadResource, runResourceT)
+import           Control.Monad.Trans.Resource (MonadResource)
 
 import           Data.Attoparsec.Text as A
 import           Data.Bits ((.&.))
-import           Data.Conduit (Producer, (=$=), ($$))
+import           Data.Conduit (ConduitT, runConduitRes, (.|))
 import qualified Data.Conduit as DC
 import qualified Data.Conduit.List as DCL
 import qualified Data.Cond as Cond
@@ -98,7 +98,6 @@ import qualified Data.Conduit.Filesystem as CF
 import           Data.IORef (IORef, newIORef, modifyIORef, readIORef)
 #endif
 import           Data.Maybe (fromMaybe, fromJust)
-import           Data.Monoid ((<>))
 import           Data.Text (Text, unpack, pack)
 import           Data.Time (UTCTime,  diffUTCTime)
 import           Data.Time.Clock.POSIX (getCurrentTime, posixSecondsToUTCTime)
@@ -491,7 +490,7 @@ sourceFindFiles :: MonadResource m
                 => FindOptions
                 -> FilePath
                 -> CondT FileEntry m a
-                -> Producer m (FileEntry, a)
+                -> ConduitT i (FileEntry, a) m ()
 sourceFindFiles findOptions startPath predicate = do
     startDc <- newDirCounter
     walk startDc
@@ -504,7 +503,7 @@ sourceFindFiles findOptions startPath predicate = do
          -> FileEntry
          -> FP.FilePath
          -> CondT FileEntry m a
-         -> Producer m (FileEntry, a)
+         -> ConduitT i (FileEntry, a) m ()
     walk !dc !entry !path !cond = do
         ((!mres, !mcond), !entry') <- lift $ applyCondT entry cond
         let opts' = entryFindOptions entry
@@ -523,7 +522,7 @@ sourceFindFiles findOptions startPath predicate = do
                  -> FileEntry
                  -> FP.FilePath
                  -> Maybe (CondT FileEntry m a)
-                 -> Producer m (FileEntry, a)
+                 -> ConduitT i (FileEntry, a) m ()
     walkChildren _ _ _ Nothing = return ()
     -- If the conditional matched, we are requested to recurse if this is a
     -- directory
@@ -544,7 +543,7 @@ sourceFindFiles findOptions startPath predicate = do
             let dc'   = dc
                 opts' = entryFindOptions entry
 #endif
-            CF.sourceDirectory path =$= DC.awaitForever (go dc' opts')
+            CF.sourceDirectory path .| DC.awaitForever (go dc' opts')
       where
         go dc' opts' fp =
             let entry' = newFileEntry fp (succ (entryDepth entry)) opts'
@@ -583,9 +582,9 @@ findFiles :: (MonadIO m, MonadBaseControl IO m, MonadThrow m, MonadUnliftIO m)
           -> CondT FileEntry m a
           -> m ()
 findFiles opts path predicate =
-    runResourceT $
+    runConduitRes $
         sourceFindFiles opts { findIgnoreResults = True } path
-            (hoist lift predicate) $$ DCL.sinkNull
+            (hoist lift predicate) .| DCL.sinkNull
 
 -- | A simpler version of 'findFiles', which yields only 'FilePath' values,
 --   and ignores any values returned by the predicate action.
@@ -593,14 +592,14 @@ findFilePaths :: (MonadIO m, MonadResource m)
               => FindOptions
               -> FilePath
               -> CondT FileEntry m a
-              -> Producer m FilePath
+              -> ConduitT i FilePath m ()
 findFilePaths opts path predicate =
-    sourceFindFiles opts path predicate =$= DCL.map (entryPath . fst)
+    sourceFindFiles opts path predicate .| DCL.map (entryPath . fst)
 
 -- | Calls 'findFilePaths' with the default set of finding options.
 --   Equivalent to @findFilePaths defaultFindOptions@.
 find :: MonadResource m
-     => FilePath -> CondT FileEntry m a -> Producer m FilePath
+     => FilePath -> CondT FileEntry m a -> DC.ConduitT i FilePath m ()
 find = findFilePaths defaultFindOptions
 
 -- | Test a file path using the same type of predicate that is accepted by

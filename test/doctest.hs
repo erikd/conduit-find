@@ -9,7 +9,7 @@ import Data.List
 
 main :: IO ()
 main = getSources >>= \sources -> doctest $
-    "-iData"
+    "-isrc/Data"
   : "-idist/build/autogen"
   : "-optP-include"
   : "-optPdist/build/autogen/cabal_macros.h"
@@ -17,7 +17,7 @@ main = getSources >>= \sources -> doctest $
 
 getSources :: IO [FilePath]
 getSources =
-    filter (\n -> ".hs" `isSuffixOf` n) <$> go "./Data"
+    filter (\n -> ".hs" `isSuffixOf` n) <$> go "./src/Data"
   where
     go dir = do
       (dirs, files) <- getFilesAndDirectories dir

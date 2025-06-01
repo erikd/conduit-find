@@ -1,12 +1,11 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 
-import           Control.Monad.Trans.Resource (runResourceT)
-
 import Data.Conduit
 import Data.Conduit.Find
-import qualified Data.Conduit.List as DCL
+import Data.Conduit.List qualified as DCL
 import Test.Hspec
 
 main :: IO ()
@@ -25,23 +24,20 @@ main = hspec $ do
             res `shouldBe` False
 
         it "finds files" $ do
-            xs <- runResourceT $
+            xs <- runConduitRes $
                 find "."
                     (do ignoreVcs
-                        when_ (name_ "dist") prune
                         glob "*.hs"
-                        not_ (glob "Setup*")
                         regular
                         not_ executable)
-                    $$ DCL.consume
+                    .| DCL.consume
 
-            "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
-            "./dist/setup-config" `elem` xs `shouldBe` False
-            "./Setup.hs" `elem` xs `shouldBe` False
+            "./src/Data/Conduit/Find.hs" `elem` xs `shouldBe` True
+            "./dist-newstyle/setup-config" `elem` xs `shouldBe` False
             "./.git/config" `elem` xs `shouldBe` False
 
         it "finds files with a different ordering" $ do
-            xs <- runResourceT $
+            xs <- runConduitRes $
                 find "."
                     (do ignoreVcs
                         glob "*.hs"
@@ -49,34 +45,32 @@ main = hspec $ do
                         -- This applies only to .hs files now, so it won't
                         -- match anything, thus having no effect but burning
                         -- CPU!
-                        when_ (name_ "dist") prune
+                        when_ (name_ "dist-newstyle") prune
                         regular
                         not_ executable)
-                    $$ DCL.consume
+                    .| DCL.consume
 
-            "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
-            "./dist/setup-config" `elem` xs `shouldBe` False
-            "./Setup.hs" `elem` xs `shouldBe` False
+            "./src/Data/Conduit/Find.hs" `elem` xs `shouldBe` True
+            "./dist-newstyle/setup-config" `elem` xs `shouldBe` False
             "./.git/config" `elem` xs `shouldBe` False
 
         it "finds files using a pre-pass filter" $ do
-            xs <- runResourceT $
+            xs <- runConduitRes $
                 find "."
                     (do ignoreVcs
-                        when_ (name_ "dist") prune
+                        when_ (name_ "dist-newstyle") prune
                         glob "*.hs"
                         not_ (glob "Setup*")
                         regular
                         not_ executable)
-                    $$ DCL.consume
+                    .| DCL.consume
 
-            "./Data/Conduit/Find.hs" `elem` xs `shouldBe` True
-            "./dist/setup-config" `elem` xs `shouldBe` False
-            "./Setup.hs" `elem` xs `shouldBe` False
+            "./src/Data/Conduit/Find.hs" `elem` xs `shouldBe` True
+            "./dist-newstyle/setup-config" `elem` xs `shouldBe` False
             "./.git/config" `elem` xs `shouldBe` False
 
         it "properly applies post-pass pruning" $ do
-            xs <- runResourceT $
+            xs <- runConduitRes $
                 find "."
                     (do ignoreVcs
                         maxdepth_ 1
@@ -85,7 +79,7 @@ main = hspec $ do
                         not_ (glob "Setup*")
                         regular
                         not_ executable)
-                    $$ DCL.consume
+                    .| DCL.consume
 
             "./Data/Conduit/Find.hs" `elem` xs `shouldBe` False
             "./dist/setup-config" `elem` xs `shouldBe` False

@@ -47,7 +47,7 @@ Library
       , conduit-combinators
       , attoparsec
       , unix-compat          >= 0.4.1.1
-      , text                 >= 2.0 && < 2.2
+      , text                 >= 1.2 && < 2.2
       , regex-posix
       , mtl
       , semigroups
@@ -79,7 +79,7 @@ test-suite test
       , conduit-combinators
       , attoparsec
       , unix-compat
-      , text                 >= 2.0 && < 2.2
+      , text
       , regex-posix
       , mtl
       , time
@@ -121,7 +121,7 @@ Executable find-hs
       , conduit-combinators
       , attoparsec
       , unix
-      , text                 >= 2.0 && < 2.2
+      , text
       , regex-posix
       , mtl
       , time

@@ -3,3 +3,38 @@ packages:
 
 tests: True
 test-show-details: direct
+
+if impl (ghc >= 9.14)
+  allow-newer:
+    , async:base
+
+-- cabal-allow-newer
+if impl (ghc >= 9.14)
+  allow-newer:
+    , bifunctors:template-haskell
+    , comonad:indexed-traversable
+    , directory:base
+    , hashable:base
+    , hashable:bytestring
+    , hashable:ghc-bignum
+    , hsc2hs:base
+    , indexed-traversable:base
+    , integer-logarithms:base
+    , integer-logarithms:ghc-bignum
+    , primitive:base
+    , random:splitmix
+    , scientific:base
+    , scientific:containers
+    , semigroupoids:bifunctors
+    , semigroupoids:hashable
+    , splitmix:base
+    , tagged:template-haskell
+    , text:bytestring
+    , text:template-haskell
+    -- th-abstraction is broken for ghc-9.14
+    , th-abstraction:template-haskell
+    , transformers:base
+    , unix:base
+    , unordered-containers:base
+    , unordered-containers:hashable
+    , unordered-containers:template-haskell
